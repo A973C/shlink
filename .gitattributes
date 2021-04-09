@@ -21,3 +21,5 @@ phpunit.xml.dist export-ignore
 phpunit-api.xml export-ignore
 phpunit-db.xml export-ignore
 phpstan.neon
+
+*.php linguist-detectable=true

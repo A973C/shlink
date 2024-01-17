@@ -1,5 +1,20 @@
 {
     "type": "object",
+    "required": [
+        "shortCode",
+        "shortUrl",
+        "longUrl",
+        "deviceLongUrls",
+        "dateCreated",
+        "visitsCount",
+        "visitsSummary",
+        "tags",
+        "meta",
+        "domain",
+        "title",
+        "crawlable",
+        "forwardQuery"
+    ],
     "properties": {
         "shortCode": {
             "type": "string",
@@ -13,14 +28,21 @@
             "type": "string",
             "description": "The original long URL."
         },
+        "deviceLongUrls": {
+            "$ref": "./DeviceLongUrlsResp.json"
+        },
         "dateCreated": {
             "type": "string",
             "format": "date-time",
             "description": "The date in which the short URL was created in ISO format."
         },
         "visitsCount": {
+            "deprecated": true,
             "type": "integer",
-            "description": "The number of visits that this short URL has recieved."
+            "description": "**[DEPRECATED]** Use `visitsSummary.total` instead."
+        },
+        "visitsSummary": {
+            "$ref": "./VisitsSummary.json"
         },
         "tags": {
             "type": "array",
@@ -33,14 +55,20 @@
             "$ref": "./ShortUrlMeta.json"
         },
         "domain": {
-            "type": "string",
-            "nullable": true,
+            "type": ["string", "null"],
             "description": "The domain in which the short URL was created. Null if it belongs to default domain."
         },
         "title": {
-            "type": "string",
-            "nullable": true,
+            "type": ["string", "null"],
             "description": "A descriptive title of the short URL."
+        },
+        "crawlable": {
+            "type": "boolean",
+            "description": "Tells if this URL will be included as 'Allow' in Shlink's robots.txt."
+        },
+        "forwardQuery": {
+            "type": "boolean",
+            "description": "Tells if this URL will forward the query params to the long URL when visited, as explained in [the docs](https://shlink.io/documentation/some-features/#query-params-forwarding)."
         }
     }
 }

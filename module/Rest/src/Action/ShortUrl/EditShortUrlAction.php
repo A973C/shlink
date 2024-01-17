@@ -8,29 +8,26 @@ use Laminas\Diactoros\Response\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Shlinkio\Shlink\Common\Rest\DataTransformerInterface;
-use Shlinkio\Shlink\Core\Model\ShortUrlEdit;
-use Shlinkio\Shlink\Core\Model\ShortUrlIdentifier;
-use Shlinkio\Shlink\Core\Service\ShortUrlServiceInterface;
+use Shlinkio\Shlink\Core\ShortUrl\Model\ShortUrlEdition;
+use Shlinkio\Shlink\Core\ShortUrl\Model\ShortUrlIdentifier;
+use Shlinkio\Shlink\Core\ShortUrl\ShortUrlServiceInterface;
 use Shlinkio\Shlink\Rest\Action\AbstractRestAction;
 use Shlinkio\Shlink\Rest\Middleware\AuthenticationMiddleware;
 
 class EditShortUrlAction extends AbstractRestAction
 {
     protected const ROUTE_PATH = '/short-urls/{shortCode}';
-    protected const ROUTE_ALLOWED_METHODS = [self::METHOD_PATCH, self::METHOD_PUT];
+    protected const ROUTE_ALLOWED_METHODS = [self::METHOD_PATCH];
 
-    private ShortUrlServiceInterface $shortUrlService;
-    private DataTransformerInterface $transformer;
-
-    public function __construct(ShortUrlServiceInterface $shortUrlService, DataTransformerInterface $transformer)
-    {
-        $this->shortUrlService = $shortUrlService;
-        $this->transformer = $transformer;
+    public function __construct(
+        private ShortUrlServiceInterface $shortUrlService,
+        private DataTransformerInterface $transformer,
+    ) {
     }
 
     public function handle(ServerRequestInterface $request): ResponseInterface
     {
-        $shortUrlEdit = ShortUrlEdit::fromRawData((array) $request->getParsedBody());
+        $shortUrlEdit = ShortUrlEdition::fromRawData((array) $request->getParsedBody());
         $identifier = ShortUrlIdentifier::fromApiRequest($request);
         $apiKey = AuthenticationMiddleware::apiKeyFromRequest($request);
 

@@ -4,56 +4,35 @@ declare(strict_types=1);
 
 namespace Shlinkio\Shlink\Rest\Service;
 
-use Cake\Chronos\Chronos;
 use Doctrine\ORM\EntityManagerInterface;
 use Shlinkio\Shlink\Common\Exception\InvalidArgumentException;
 use Shlinkio\Shlink\Rest\ApiKey\Model\ApiKeyMeta;
-use Shlinkio\Shlink\Rest\ApiKey\Model\RoleDefinition;
+use Shlinkio\Shlink\Rest\ApiKey\Repository\ApiKeyRepositoryInterface;
 use Shlinkio\Shlink\Rest\Entity\ApiKey;
 
 use function sprintf;
 
 class ApiKeyService implements ApiKeyServiceInterface
 {
-    private EntityManagerInterface $em;
-
-    public function __construct(EntityManagerInterface $em)
+    public function __construct(private readonly EntityManagerInterface $em)
     {
-        $this->em = $em;
     }
 
-    public function create(
-        ?Chronos $expirationDate = null,
-        ?string $name = null,
-        RoleDefinition ...$roleDefinitions
-    ): ApiKey {
-        $key = $this->buildApiKeyWithParams($expirationDate, $name);
-        foreach ($roleDefinitions as $definition) {
-            $key->registerRole($definition);
-        }
+    public function create(ApiKeyMeta $apiKeyMeta): ApiKey
+    {
+        $apiKey = ApiKey::fromMeta($apiKeyMeta);
 
-        $this->em->persist($key);
+        $this->em->persist($apiKey);
         $this->em->flush();
 
-        return $key;
+        return $apiKey;
     }
 
-    private function buildApiKeyWithParams(?Chronos $expirationDate, ?string $name): ApiKey
+    public function createInitial(string $key): ?ApiKey
     {
-        // TODO Use match expression when migrating to PHP8
-        if ($expirationDate === null && $name === null) {
-            return ApiKey::create();
-        }
-
-        if ($expirationDate !== null && $name !== null) {
-            return ApiKey::fromMeta(ApiKeyMeta::withNameAndExpirationDate($name, $expirationDate));
-        }
-
-        if ($name === null) {
-            return ApiKey::fromMeta(ApiKeyMeta::withExpirationDate($expirationDate));
-        }
-
-        return ApiKey::fromMeta(ApiKeyMeta::withName($name));
+        /** @var ApiKeyRepositoryInterface $repo */
+        $repo = $this->em->getRepository(ApiKey::class);
+        return $repo->createInitialApiKey($key);
     }
 
     public function check(string $key): ApiKeyCheckResult

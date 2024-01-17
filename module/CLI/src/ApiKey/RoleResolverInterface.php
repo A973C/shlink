@@ -9,11 +9,8 @@ use Symfony\Component\Console\Input\InputInterface;
 
 interface RoleResolverInterface
 {
-    public const AUTHOR_ONLY_PARAM = 'author-only';
-    public const DOMAIN_ONLY_PARAM = 'domain-only';
-
     /**
-     * @return RoleDefinition[]
+     * @return iterable<RoleDefinition>
      */
-    public function determineRoles(InputInterface $input): array;
+    public function determineRoles(InputInterface $input): iterable;
 }

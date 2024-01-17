@@ -11,16 +11,12 @@ use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 
-use function array_merge;
 use function implode;
 
 class CrossDomainMiddleware implements MiddlewareInterface, RequestMethodInterface
 {
-    private array $config;
-
-    public function __construct(array $config)
+    public function __construct(private array $config)
     {
-        $this->config = $config;
     }
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
@@ -48,7 +44,7 @@ class CrossDomainMiddleware implements MiddlewareInterface, RequestMethodInterfa
         ];
 
         // Options requests should always be empty and have a 204 status code
-        return EmptyResponse::withHeaders(array_merge($response->getHeaders(), $corsHeaders));
+        return EmptyResponse::withHeaders([...$response->getHeaders(), ...$corsHeaders]);
     }
 
     private function resolveCorsAllowedMethods(ResponseInterface $response): string

@@ -10,7 +10,6 @@ use Doctrine\Common\Collections\Collection;
 use Exception;
 use Happyr\DoctrineSpecification\Spec;
 use Happyr\DoctrineSpecification\Specification\Specification;
-use Ramsey\Uuid\Uuid;
 use Shlinkio\Shlink\Common\Entity\AbstractEntity;
 use Shlinkio\Shlink\Rest\ApiKey\Model\ApiKeyMeta;
 use Shlinkio\Shlink\Rest\ApiKey\Model\RoleDefinition;
@@ -21,31 +20,38 @@ class ApiKey extends AbstractEntity
     private string $key;
     private ?Chronos $expirationDate = null;
     private bool $enabled;
-    /** @var Collection|ApiKeyRole[] */
+    /** @var Collection<string, ApiKeyRole> */
     private Collection $roles;
-    private ?string $name;
+    private ?string $name = null;
 
     /**
      * @throws Exception
      */
-    private function __construct(?string $name = null, ?Chronos $expirationDate = null)
+    private function __construct(string $key)
     {
-        $this->key = Uuid::uuid4()->toString();
-        $this->expirationDate = $expirationDate;
-        $this->name = $name;
+        $this->key = $key;
         $this->enabled = true;
         $this->roles = new ArrayCollection();
     }
 
+    /**
+     * @throws Exception
+     */
     public static function create(): ApiKey
     {
-        return new self();
+        return self::fromMeta(ApiKeyMeta::empty());
     }
 
+    /**
+     * @throws Exception
+     */
     public static function fromMeta(ApiKeyMeta $meta): self
     {
-        $apiKey = new self($meta->name(), $meta->expirationDate());
-        foreach ($meta->roleDefinitions() as $roleDefinition) {
+        $apiKey = new self($meta->key);
+        $apiKey->name = $meta->name;
+        $apiKey->expirationDate = $meta->expirationDate;
+
+        foreach ($meta->roleDefinitions as $roleDefinition) {
             $apiKey->registerRole($roleDefinition);
         }
 
@@ -59,7 +65,7 @@ class ApiKey extends AbstractEntity
 
     public function isExpired(): bool
     {
-        return $this->expirationDate !== null && $this->expirationDate->lt(Chronos::now());
+        return $this->expirationDate !== null && $this->expirationDate->lessThan(Chronos::now());
     }
 
     public function name(): ?string
@@ -96,51 +102,72 @@ class ApiKey extends AbstractEntity
         return $this->key;
     }
 
-    public function spec(bool $inlined = false, ?string $context = null): Specification
+    public function spec(?string $context = null): Specification
     {
-        $specs = $this->roles->map(fn (ApiKeyRole $role) => Role::toSpec($role, $inlined, $context))->getValues();
+        $specs = $this->roles->map(fn (ApiKeyRole $role) => Role::toSpec($role, $context))->getValues();
         return Spec::andX(...$specs);
     }
 
-    public function isAdmin(): bool
+    public function inlinedSpec(): Specification
     {
-        return $this->roles->isEmpty();
+        $specs = $this->roles->map(fn (ApiKeyRole $role) => Role::toInlinedSpec($role))->getValues();
+        return Spec::andX(...$specs);
     }
 
-    public function hasRole(string $roleName): bool
+    /**
+     * @return ($apiKey is null ? true : boolean)
+     */
+    public static function isAdmin(?ApiKey $apiKey): bool
     {
-        return $this->roles->containsKey($roleName);
+        return $apiKey === null || $apiKey->roles->isEmpty();
     }
 
-    public function getRoleMeta(string $roleName): array
+    /**
+     * Tells if provided API key has any of the roles restricting at the short URL level
+     */
+    public static function isShortUrlRestricted(?ApiKey $apiKey): bool
     {
-        /** @var ApiKeyRole|null $role */
-        $role = $this->roles->get($roleName);
-        return $role === null ? [] : $role->meta();
+        if ($apiKey === null) {
+            return false;
+        }
+
+        return (
+            $apiKey->roles->containsKey(Role::AUTHORED_SHORT_URLS->value)
+            || $apiKey->roles->containsKey(Role::DOMAIN_SPECIFIC->value)
+        );
     }
 
+    public function hasRole(Role $role): bool
+    {
+        return $this->roles->containsKey($role->value);
+    }
+
+    public function getRoleMeta(Role $role): array
+    {
+        /** @var ApiKeyRole|null $apiKeyRole */
+        $apiKeyRole = $this->roles->get($role->value);
+        return $apiKeyRole?->meta() ?? [];
+    }
+
+    /**
+     * @template T
+     * @param callable(Role $role, array $meta): T $fun
+     * @return T[]
+     */
     public function mapRoles(callable $fun): array
     {
-        return $this->roles->map(fn (ApiKeyRole $role) => $fun($role->name(), $role->meta()))->getValues();
+        return $this->roles->map(fn (ApiKeyRole $role) => $fun($role->role(), $role->meta()))->getValues();
     }
 
     public function registerRole(RoleDefinition $roleDefinition): void
     {
-        $roleName = $roleDefinition->roleName();
-        $meta = $roleDefinition->meta();
+        $role = $roleDefinition->role;
+        $meta = $roleDefinition->meta;
 
-        if ($this->hasRole($roleName)) {
-            /** @var ApiKeyRole $role */
-            $role = $this->roles->get($roleName);
-            $role->updateMeta($meta);
+        if ($this->hasRole($role)) {
+            $this->roles->get($role->value)?->updateMeta($meta);
         } else {
-            $role = new ApiKeyRole($roleDefinition->roleName(), $roleDefinition->meta(), $this);
-            $this->roles[$roleName] = $role;
+            $this->roles->set($role->value, new ApiKeyRole($role, $meta, $this));
         }
-    }
-
-    public function removeRole(string $roleName): void
-    {
-        $this->roles->remove($roleName);
     }
 }

@@ -17,16 +17,11 @@ class HealthAction extends AbstractRestAction
     private const STATUS_PASS = 'pass';
     private const STATUS_FAIL = 'fail';
 
-    protected const ROUTE_PATH = '/health';
+    public const ROUTE_PATH = '/health';
     protected const ROUTE_ALLOWED_METHODS = [self::METHOD_GET];
 
-    private EntityManagerInterface $em;
-    private AppOptions $options;
-
-    public function __construct(EntityManagerInterface $em, AppOptions $options)
+    public function __construct(private EntityManagerInterface $em, private AppOptions $options)
     {
-        $this->em = $em;
-        $this->options = $options;
     }
 
     /**
@@ -37,15 +32,17 @@ class HealthAction extends AbstractRestAction
     public function handle(ServerRequestInterface $request): ResponseInterface
     {
         try {
-            $connected = $this->em->getConnection()->ping();
-        } catch (Throwable $e) {
+            $connection = $this->em->getConnection();
+            $connection->executeQuery($connection->getDatabasePlatform()->getDummySelectSQL());
+            $connected = true;
+        } catch (Throwable) {
             $connected = false;
         }
 
         $statusCode = $connected ? self::STATUS_OK : self::STATUS_SERVICE_UNAVAILABLE;
         return new JsonResponse([
             'status' => $connected ? self::STATUS_PASS : self::STATUS_FAIL,
-            'version' => $this->options->getVersion(),
+            'version' => $this->options->version,
             'links' => [
                 'about' => 'https://shlink.io',
                 'project' => 'https://github.com/shlinkio/shlink',

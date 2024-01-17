@@ -7,126 +7,113 @@ namespace ShlinkioTest\Shlink\Rest\Middleware\ShortUrl;
 use Laminas\Diactoros\Response;
 use Laminas\Diactoros\ServerRequestFactory;
 use PHPUnit\Framework\Assert;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use Shlinkio\Shlink\Core\Domain\DomainServiceInterface;
-use Shlinkio\Shlink\Core\Entity\Domain;
-use Shlinkio\Shlink\Core\Validation\ShortUrlInputFilter;
+use Shlinkio\Shlink\Core\Domain\Entity\Domain;
+use Shlinkio\Shlink\Core\ShortUrl\Model\Validation\ShortUrlInputFilter;
 use Shlinkio\Shlink\Rest\ApiKey\Role;
 use Shlinkio\Shlink\Rest\Entity\ApiKey;
 use Shlinkio\Shlink\Rest\Middleware\ShortUrl\OverrideDomainMiddleware;
 
 class OverrideDomainMiddlewareTest extends TestCase
 {
-    use ProphecyTrait;
-
     private OverrideDomainMiddleware $middleware;
-    private ObjectProphecy $domainService;
-    private ObjectProphecy $apiKey;
-    private ObjectProphecy $handler;
+    private MockObject & DomainServiceInterface $domainService;
+    private MockObject & ApiKey $apiKey;
+    private MockObject & RequestHandlerInterface $handler;
 
     protected function setUp(): void
     {
-        $this->apiKey = $this->prophesize(ApiKey::class);
-        $this->handler = $this->prophesize(RequestHandlerInterface::class);
+        $this->apiKey = $this->createMock(ApiKey::class);
+        $this->handler = $this->createMock(RequestHandlerInterface::class);
 
-        $this->domainService = $this->prophesize(DomainServiceInterface::class);
-        $this->middleware = new OverrideDomainMiddleware($this->domainService->reveal());
+        $this->domainService = $this->createMock(DomainServiceInterface::class);
+        $this->middleware = new OverrideDomainMiddleware($this->domainService);
     }
 
-    /** @test */
+    #[Test]
     public function nextMiddlewareIsCalledWhenApiKeyDoesNotHaveProperRole(): void
     {
         $request = $this->requestWithApiKey();
         $response = new Response();
-        $hasRole = $this->apiKey->hasRole(Role::DOMAIN_SPECIFIC)->willReturn(false);
-        $handle = $this->handler->handle($request)->willReturn($response);
-        $getDomain = $this->domainService->getDomain(Argument::cetera());
+        $this->apiKey->expects($this->once())->method('hasRole')->with(Role::DOMAIN_SPECIFIC)->willReturn(false);
+        $this->handler->expects($this->once())->method('handle')->with($request)->willReturn($response);
+        $this->domainService->expects($this->never())->method('getDomain');
 
-        $result = $this->middleware->process($request, $this->handler->reveal());
+        $result = $this->middleware->process($request, $this->handler);
 
         self::assertSame($response, $result);
-        $hasRole->shouldHaveBeenCalledOnce();
-        $handle->shouldHaveBeenCalledOnce();
-        $getDomain->shouldNotHaveBeenCalled();
     }
 
-    /**
-     * @test
-     * @dataProvider provideBodies
-     */
+    #[Test, DataProvider('provideBodies')]
     public function overwritesRequestBodyWhenMethodIsPost(Domain $domain, array $body, array $expectedBody): void
     {
         $request = $this->requestWithApiKey()->withMethod('POST')->withParsedBody($body);
-        $hasRole = $this->apiKey->hasRole(Role::DOMAIN_SPECIFIC)->willReturn(true);
-        $getRoleMeta = $this->apiKey->getRoleMeta(Role::DOMAIN_SPECIFIC)->willReturn(['domain_id' => '123']);
-        $getDomain = $this->domainService->getDomain('123')->willReturn($domain);
-        $handle = $this->handler->handle(Argument::that(
+        $this->apiKey->expects($this->once())->method('hasRole')->with(Role::DOMAIN_SPECIFIC)->willReturn(true);
+        $this->apiKey->expects($this->once())->method('getRoleMeta')->with(Role::DOMAIN_SPECIFIC)->willReturn(
+            ['domain_id' => '123'],
+        );
+        $this->domainService->expects($this->once())->method('getDomain')->with('123')->willReturn($domain);
+        $this->handler->expects($this->once())->method('handle')->with($this->callback(
             function (ServerRequestInterface $req) use ($expectedBody): bool {
                 Assert::assertEquals($req->getParsedBody(), $expectedBody);
                 return true;
             },
         ))->willReturn(new Response());
 
-        $this->middleware->process($request, $this->handler->reveal());
-
-        $hasRole->shouldHaveBeenCalledOnce();
-        $getRoleMeta->shouldHaveBeenCalledOnce();
-        $getDomain->shouldHaveBeenCalledOnce();
-        $handle->shouldHaveBeenCalledOnce();
+        $this->middleware->process($request, $this->handler);
     }
 
-    public function provideBodies(): iterable
+    public static function provideBodies(): iterable
     {
-        yield 'no domain provided' => [new Domain('foo.com'), [], [ShortUrlInputFilter::DOMAIN => 'foo.com']];
+        yield 'no domain provided' => [
+            Domain::withAuthority('foo.com'),
+            [],
+            [ShortUrlInputFilter::DOMAIN => 'foo.com'],
+        ];
         yield 'other domain provided' => [
-            new Domain('bar.com'),
+            Domain::withAuthority('bar.com'),
             [ShortUrlInputFilter::DOMAIN => 'foo.com'],
             [ShortUrlInputFilter::DOMAIN => 'bar.com'],
         ];
         yield 'same domain provided' => [
-            new Domain('baz.com'),
+            Domain::withAuthority('baz.com'),
             [ShortUrlInputFilter::DOMAIN => 'baz.com'],
             [ShortUrlInputFilter::DOMAIN => 'baz.com'],
         ];
         yield 'more body params' => [
-            new Domain('doma.in'),
+            Domain::withAuthority('s.test'),
             [ShortUrlInputFilter::DOMAIN => 'baz.com', 'something' => 'else', 'foo' => 123],
-            [ShortUrlInputFilter::DOMAIN => 'doma.in', 'something' => 'else', 'foo' => 123],
+            [ShortUrlInputFilter::DOMAIN => 's.test', 'something' => 'else', 'foo' => 123],
         ];
     }
 
-    /**
-     * @test
-     * @dataProvider provideMethods
-     */
+    #[Test, DataProvider('provideMethods')]
     public function setsRequestAttributeWhenMethodIsNotPost(string $method): void
     {
-        $domain = new Domain('something.com');
+        $domain = Domain::withAuthority('something.com');
         $request = $this->requestWithApiKey()->withMethod($method);
-        $hasRole = $this->apiKey->hasRole(Role::DOMAIN_SPECIFIC)->willReturn(true);
-        $getRoleMeta = $this->apiKey->getRoleMeta(Role::DOMAIN_SPECIFIC)->willReturn(['domain_id' => '123']);
-        $getDomain = $this->domainService->getDomain('123')->willReturn($domain);
-        $handle = $this->handler->handle(Argument::that(
+        $this->apiKey->expects($this->once())->method('hasRole')->with(Role::DOMAIN_SPECIFIC)->willReturn(true);
+        $this->apiKey->expects($this->once())->method('getRoleMeta')->with(Role::DOMAIN_SPECIFIC)->willReturn(
+            ['domain_id' => '123'],
+        );
+        $this->domainService->expects($this->once())->method('getDomain')->with('123')->willReturn($domain);
+        $this->handler->expects($this->once())->method('handle')->with($this->callback(
             function (ServerRequestInterface $req): bool {
                 Assert::assertEquals($req->getAttribute(ShortUrlInputFilter::DOMAIN), 'something.com');
                 return true;
             },
         ))->willReturn(new Response());
 
-        $this->middleware->process($request, $this->handler->reveal());
-
-        $hasRole->shouldHaveBeenCalledOnce();
-        $getRoleMeta->shouldHaveBeenCalledOnce();
-        $getDomain->shouldHaveBeenCalledOnce();
-        $handle->shouldHaveBeenCalledOnce();
+        $this->middleware->process($request, $this->handler);
     }
 
-    public function provideMethods(): iterable
+    public static function provideMethods(): iterable
     {
         yield 'GET' => ['GET'];
         yield 'PUT' => ['PUT'];
@@ -136,6 +123,6 @@ class OverrideDomainMiddlewareTest extends TestCase
 
     private function requestWithApiKey(): ServerRequestInterface
     {
-        return ServerRequestFactory::fromGlobals()->withAttribute(ApiKey::class, $this->apiKey->reveal());
+        return ServerRequestFactory::fromGlobals()->withAttribute(ApiKey::class, $this->apiKey);
     }
 }

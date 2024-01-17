@@ -4,33 +4,32 @@ declare(strict_types=1);
 
 namespace ShlinkioTest\Shlink\Core\ShortUrl\Helper;
 
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Shlinkio\Shlink\Core\Entity\ShortUrl;
-use Shlinkio\Shlink\Core\Model\ShortUrlMeta;
+use Shlinkio\Shlink\Core\ShortUrl\Entity\ShortUrl;
 use Shlinkio\Shlink\Core\ShortUrl\Helper\ShortUrlStringifier;
+use Shlinkio\Shlink\Core\ShortUrl\Model\ShortUrlCreation;
 
 class ShortUrlStringifierTest extends TestCase
 {
-    /**
-     * @test
-     * @dataProvider provideConfigAndShortUrls
-     */
+    #[Test, DataProvider('provideConfigAndShortUrls')]
     public function generatesExpectedOutputBasedOnConfigAndShortUrl(
         array $config,
         string $basePath,
         ShortUrl $shortUrl,
-        string $expected
+        string $expected,
     ): void {
         $stringifier = new ShortUrlStringifier($config, $basePath);
 
         self::assertEquals($expected, $stringifier->stringify($shortUrl));
     }
 
-    public function provideConfigAndShortUrls(): iterable
+    public static function provideConfigAndShortUrls(): iterable
     {
-        $shortUrlWithShortCode = fn (string $shortCode, ?string $domain = null) => ShortUrl::fromMeta(
-            ShortUrlMeta::fromRawData([
-                'longUrl' => '',
+        $shortUrlWithShortCode = fn (string $shortCode, ?string $domain = null) => ShortUrl::create(
+            ShortUrlCreation::fromRawData([
+                'longUrl' => 'https://longUrl',
                 'customSlug' => $shortCode,
                 'domain' => $domain,
             ]),
@@ -42,6 +41,18 @@ class ShortUrlStringifierTest extends TestCase
             '',
             $shortUrlWithShortCode('bar'),
             'http://example.com/bar',
+        ];
+        yield 'special chars in short code' => [
+            ['hostname' => 'example.com'],
+            '',
+            $shortUrlWithShortCode('グーグル'),
+            'http://example.com/グーグル',
+        ];
+        yield 'emojis in short code' => [
+            ['hostname' => 'example.com'],
+            '',
+            $shortUrlWithShortCode('🦣-🍅'),
+            'http://example.com/🦣-🍅',
         ];
         yield 'hostname with base path in config' => [
             ['hostname' => 'example.com/foo/bar'],

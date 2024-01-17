@@ -6,10 +6,13 @@ namespace ShlinkioTest\Shlink\Core\Visit\Transformer;
 
 use Laminas\Diactoros\ServerRequestFactory;
 use Laminas\Diactoros\Uri;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Shlinkio\Shlink\Core\Entity\Visit;
-use Shlinkio\Shlink\Core\Entity\VisitLocation;
-use Shlinkio\Shlink\Core\Model\Visitor;
+use Shlinkio\Shlink\Core\Visit\Entity\Visit;
+use Shlinkio\Shlink\Core\Visit\Entity\VisitLocation;
+use Shlinkio\Shlink\Core\Visit\Model\Visitor;
+use Shlinkio\Shlink\Core\Visit\Model\VisitType;
 use Shlinkio\Shlink\Core\Visit\Transformer\OrphanVisitDataTransformer;
 use Shlinkio\Shlink\IpGeolocation\Model\Location;
 
@@ -22,10 +25,7 @@ class OrphanVisitDataTransformerTest extends TestCase
         $this->transformer = new OrphanVisitDataTransformer();
     }
 
-    /**
-     * @test
-     * @dataProvider provideVisits
-     */
+    #[Test, DataProvider('provideVisits')]
     public function visitsAreParsedAsExpected(Visit $visit, array $expectedResult): void
     {
         $result = $this->transformer->transform($visit);
@@ -33,7 +33,7 @@ class OrphanVisitDataTransformerTest extends TestCase
         self::assertEquals($expectedResult, $result);
     }
 
-    public function provideVisits(): iterable
+    public static function provideVisits(): iterable
     {
         yield 'base path visit' => [
             $visit = Visit::forBasePath(Visitor::emptyInstance()),
@@ -42,8 +42,9 @@ class OrphanVisitDataTransformerTest extends TestCase
                 'date' => $visit->getDate()->toAtomString(),
                 'userAgent' => '',
                 'visitLocation' => null,
+                'potentialBot' => false,
                 'visitedUrl' => '',
-                'type' => Visit::TYPE_BASE_URL,
+                'type' => VisitType::BASE_URL->value,
             ],
         ];
         yield 'invalid short url visit' => [
@@ -57,8 +58,9 @@ class OrphanVisitDataTransformerTest extends TestCase
                 'date' => $visit->getDate()->toAtomString(),
                 'userAgent' => 'foo',
                 'visitLocation' => null,
+                'potentialBot' => false,
                 'visitedUrl' => 'https://example.com/foo',
-                'type' => Visit::TYPE_INVALID_SHORT_URL,
+                'type' => VisitType::INVALID_SHORT_URL->value,
             ],
         ];
         yield 'regular 404 visit' => [
@@ -66,16 +68,17 @@ class OrphanVisitDataTransformerTest extends TestCase
                 Visitor::fromRequest(
                     ServerRequestFactory::fromGlobals()->withHeader('User-Agent', 'user-agent')
                                                        ->withHeader('Referer', 'referer')
-                                                       ->withUri(new Uri('https://doma.in/foo/bar')),
+                                                       ->withUri(new Uri('https://s.test/foo/bar')),
                 ),
-            )->locate($location = new VisitLocation(Location::emptyInstance())),
+            )->locate($location = VisitLocation::fromGeolocation(Location::emptyInstance())),
             [
                 'referer' => 'referer',
                 'date' => $visit->getDate()->toAtomString(),
                 'userAgent' => 'user-agent',
                 'visitLocation' => $location,
-                'visitedUrl' => 'https://doma.in/foo/bar',
-                'type' => Visit::TYPE_REGULAR_404,
+                'potentialBot' => false,
+                'visitedUrl' => 'https://s.test/foo/bar',
+                'type' => VisitType::REGULAR_404->value,
             ],
         ];
     }

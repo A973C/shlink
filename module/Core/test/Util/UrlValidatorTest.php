@@ -7,53 +7,45 @@ namespace ShlinkioTest\Shlink\Core\Util;
 use Fig\Http\Message\RequestMethodInterface;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\ClientException;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\RequestOptions;
 use Laminas\Diactoros\Response;
 use Laminas\Diactoros\Stream;
 use PHPUnit\Framework\Assert;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
 use Shlinkio\Shlink\Core\Exception\InvalidUrlException;
 use Shlinkio\Shlink\Core\Options\UrlShortenerOptions;
 use Shlinkio\Shlink\Core\Util\UrlValidator;
 
 class UrlValidatorTest extends TestCase
 {
-    use ProphecyTrait;
+    private MockObject & ClientInterface $httpClient;
 
-    private UrlValidator $urlValidator;
-    private ObjectProphecy $httpClient;
-    private UrlShortenerOptions $options;
-
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->httpClient = $this->prophesize(ClientInterface::class);
-        $this->options = new UrlShortenerOptions(['validate_url' => true]);
-        $this->urlValidator = new UrlValidator($this->httpClient->reveal(), $this->options);
+        $this->httpClient = $this->createMock(ClientInterface::class);
     }
 
-    /** @test */
+    #[Test]
     public function exceptionIsThrownWhenUrlIsInvalid(): void
     {
-        $request = $this->httpClient->request(Argument::cetera())->willThrow(ClientException::class);
-
-        $request->shouldBeCalledOnce();
+        $this->httpClient->expects($this->once())->method('request')->willThrowException($this->clientException());
         $this->expectException(InvalidUrlException::class);
 
-        $this->urlValidator->validateUrl('http://foobar.com/12345/hello?foo=bar', null);
+        $this->urlValidator()->validateUrl('http://foobar.com/12345/hello?foo=bar', true);
     }
 
-    /** @test */
+    #[Test]
     public function expectedUrlIsCalledWhenTryingToVerify(): void
     {
         $expectedUrl = 'http://foobar.com';
 
-        $request = $this->httpClient->request(
+        $this->httpClient->expects($this->once())->method('request')->with(
             RequestMethodInterface::METHOD_GET,
             $expectedUrl,
-            Argument::that(function (array $options) {
+            $this->callback(function (array $options) {
                 Assert::assertArrayHasKey(RequestOptions::ALLOW_REDIRECTS, $options);
                 Assert::assertEquals(['max' => 15], $options[RequestOptions::ALLOW_REDIRECTS]);
                 Assert::assertArrayHasKey(RequestOptions::IDN_CONVERSION, $options);
@@ -65,79 +57,120 @@ class UrlValidatorTest extends TestCase
             }),
         )->willReturn(new Response());
 
-        $this->urlValidator->validateUrl($expectedUrl, null);
-
-        $request->shouldHaveBeenCalledOnce();
+        $this->urlValidator()->validateUrl($expectedUrl, true);
     }
 
-    /**
-     * @test
-     * @dataProvider provideDisabledCombinations
-     */
-    public function noCheckIsPerformedWhenUrlValidationIsDisabled(?bool $doValidate, bool $validateUrl): void
+    #[Test]
+    public function noCheckIsPerformedWhenUrlValidationIsDisabled(): void
     {
-        $request = $this->httpClient->request(Argument::cetera())->willReturn(new Response());
-        $this->options->validateUrl = $validateUrl;
-
-        $this->urlValidator->validateUrl('', $doValidate);
-
-        $request->shouldNotHaveBeenCalled();
+        $this->httpClient->expects($this->never())->method('request');
+        $this->urlValidator()->validateUrl('', false);
     }
 
-    /**
-     * @test
-     * @dataProvider provideDisabledCombinations
-     */
-    public function validateUrlWithTitleReturnsNullWhenRequestFailsAndValidationIsDisabled(
-        ?bool $doValidate,
-        bool $validateUrl
-    ): void {
-        $request = $this->httpClient->request(Argument::cetera())->willThrow(ClientException::class);
-        $this->options->validateUrl = $validateUrl;
-        $this->options->autoResolveTitles = true;
+    #[Test]
+    public function validateUrlWithTitleReturnsNullWhenRequestFailsAndValidationIsDisabled(): void
+    {
+        $this->httpClient->expects($this->once())->method('request')->willThrowException($this->clientException());
 
-        $result = $this->urlValidator->validateUrlWithTitle('http://foobar.com/12345/hello?foo=bar', $doValidate);
+        $result = $this->urlValidator(true)->validateUrlWithTitle('http://foobar.com/12345/hello?foo=bar', false);
 
         self::assertNull($result);
-        $request->shouldHaveBeenCalledOnce();
     }
 
-    public function provideDisabledCombinations(): iterable
-    {
-        yield 'config is disabled and no runtime option is provided' => [null, false];
-        yield 'config is enabled but runtime option is disabled' => [false, true];
-        yield 'both config and runtime option are disabled' => [false, false];
-    }
-
-    /** @test */
+    #[Test]
     public function validateUrlWithTitleReturnsNullWhenAutoResolutionIsDisabled(): void
     {
-        $request = $this->httpClient->request(Argument::cetera())->willReturn($this->respWithTitle());
-        $this->options->autoResolveTitles = false;
+        $this->httpClient->expects($this->never())->method('request');
 
-        $result = $this->urlValidator->validateUrlWithTitle('http://foobar.com/12345/hello?foo=bar', false);
+        $result = $this->urlValidator()->validateUrlWithTitle('http://foobar.com/12345/hello?foo=bar', false);
 
         self::assertNull($result);
-        $request->shouldNotHaveBeenCalled();
     }
 
-    /** @test */
+    #[Test]
+    public function validateUrlWithTitleReturnsNullWhenAutoResolutionIsDisabledAndValidationIsEnabled(): void
+    {
+        $this->httpClient->expects($this->once())->method('request')->with(
+            RequestMethodInterface::METHOD_HEAD,
+            $this->anything(),
+            $this->anything(),
+        )->willReturn($this->respWithTitle());
+
+        $result = $this->urlValidator()->validateUrlWithTitle('http://foobar.com/12345/hello?foo=bar', true);
+
+        self::assertNull($result);
+    }
+
+    #[Test]
     public function validateUrlWithTitleResolvesTitleWhenAutoResolutionIsEnabled(): void
     {
-        $request = $this->httpClient->request(Argument::cetera())->willReturn($this->respWithTitle());
-        $this->options->autoResolveTitles = true;
+        $this->httpClient->expects($this->once())->method('request')->with(
+            RequestMethodInterface::METHOD_GET,
+            $this->anything(),
+            $this->anything(),
+        )->willReturn($this->respWithTitle());
 
-        $result = $this->urlValidator->validateUrlWithTitle('http://foobar.com/12345/hello?foo=bar', true);
+        $result = $this->urlValidator(true)->validateUrlWithTitle('http://foobar.com/12345/hello?foo=bar', true);
 
-        self::assertEquals('Resolved title', $result);
-        $request->shouldHaveBeenCalledOnce();
+        self::assertEquals('Resolved "title"', $result);
+    }
+
+    #[Test]
+    public function validateUrlWithTitleReturnsNullWhenAutoResolutionIsEnabledAndReturnedContentTypeIsInvalid(): void
+    {
+        $this->httpClient->expects($this->once())->method('request')->with(
+            RequestMethodInterface::METHOD_GET,
+            $this->anything(),
+            $this->anything(),
+        )->willReturn(new Response('php://memory', 200, ['Content-Type' => 'application/octet-stream']));
+
+        $result = $this->urlValidator(true)->validateUrlWithTitle('http://foobar.com/12345/hello?foo=bar', true);
+
+        self::assertNull($result);
+    }
+
+    #[Test]
+    public function validateUrlWithTitleReturnsNullWhenAutoResolutionIsEnabledAndBodyDoesNotContainTitle(): void
+    {
+        $this->httpClient->expects($this->once())->method('request')->with(
+            RequestMethodInterface::METHOD_GET,
+            $this->anything(),
+            $this->anything(),
+        )->willReturn(
+            new Response($this->createStreamWithContent('<body>No title</body>'), 200, ['Content-Type' => 'text/html']),
+        );
+
+        $result = $this->urlValidator(true)->validateUrlWithTitle('http://foobar.com/12345/hello?foo=bar', true);
+
+        self::assertNull($result);
     }
 
     private function respWithTitle(): Response
     {
-        $body = new Stream('php://temp', 'wr');
-        $body->write('<title>  Resolved title</title>');
+        $body = $this->createStreamWithContent('<title data-foo="bar">  Resolved &quot;title&quot; </title>');
+        return new Response($body, 200, ['Content-Type' => 'TEXT/html; charset=utf-8']);
+    }
 
-        return new Response($body);
+    private function createStreamWithContent(string $content): Stream
+    {
+        $body = new Stream('php://temp', 'wr');
+        $body->write($content);
+        $body->rewind();
+
+        return $body;
+    }
+
+    private function clientException(): ClientException
+    {
+        return new ClientException(
+            '',
+            new Request(RequestMethodInterface::METHOD_GET, ''),
+            new Response(),
+        );
+    }
+
+    public function urlValidator(bool $autoResolveTitles = false): UrlValidator
+    {
+        return new UrlValidator($this->httpClient, new UrlShortenerOptions(autoResolveTitles: $autoResolveTitles));
     }
 }

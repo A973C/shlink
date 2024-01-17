@@ -5,14 +5,14 @@
 
 This image provides an easy way to set up [shlink](https://shlink.io) on a container-based runtime.
 
-It exposes a shlink instance served with [swoole](https://www.swoole.co.uk/), which can be linked to external databases to persist data.
+It exposes a shlink instance served with [RoadRunner](https://roadrunner.dev) or [openswoole](https://openswoole.com/), which can be linked to external databases to persist data.
 
 ## Usage
 
 The most basic way to run Shlink's docker image is by providing these mandatory env vars.
 
-* `SHORT_DOMAIN_HOST`: The custom short domain used for this shlink instance. For example **doma.in**.
-* `SHORT_DOMAIN_SCHEMA`: Either **http** or **https**.
+* `DEFAULT_DOMAIN`: The default short domain used for this shlink instance. For example **s.test**.
+* `IS_HTTPS_ENABLED`: Either **true** or **false**. Tells if Shlink is being served with HTTPs or not.
 * `GEOLITE_LICENSE_KEY`: Your GeoLite2 license key. [Learn more](https://shlink.io/documentation/geolite-license-key/) about this.
 
 To run shlink on top of a local docker service, and using an internal SQLite database, do the following:
@@ -21,8 +21,8 @@ To run shlink on top of a local docker service, and using an internal SQLite dat
 docker run \
     --name shlink \
     -p 8080:8080 \
-    -e SHORT_DOMAIN_HOST=doma.in \
-    -e SHORT_DOMAIN_SCHEMA=https \
+    -e DEFAULT_DOMAIN=s.test \
+    -e IS_HTTPS_ENABLED=true \
     -e GEOLITE_LICENSE_KEY=kjh23ljkbndskj345 \
     shlinkio/shlink:stable
 ```

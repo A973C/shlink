@@ -5,86 +5,80 @@ declare(strict_types=1);
 namespace ShlinkioTest\Shlink\Core\Visit;
 
 use Doctrine\ORM\EntityManager;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
 use Psr\EventDispatcher\EventDispatcherInterface;
-use Shlinkio\Shlink\Core\Entity\ShortUrl;
-use Shlinkio\Shlink\Core\Entity\Visit;
 use Shlinkio\Shlink\Core\EventDispatcher\Event\UrlVisited;
-use Shlinkio\Shlink\Core\Model\Visitor;
-use Shlinkio\Shlink\Core\Options\UrlShortenerOptions;
+use Shlinkio\Shlink\Core\Options\TrackingOptions;
+use Shlinkio\Shlink\Core\ShortUrl\Entity\ShortUrl;
+use Shlinkio\Shlink\Core\Visit\Entity\Visit;
+use Shlinkio\Shlink\Core\Visit\Model\Visitor;
 use Shlinkio\Shlink\Core\Visit\VisitsTracker;
 
 class VisitsTrackerTest extends TestCase
 {
-    use ProphecyTrait;
+    private MockObject & EntityManager $em;
+    private MockObject & EventDispatcherInterface $eventDispatcher;
 
-    private VisitsTracker $visitsTracker;
-    private ObjectProphecy $em;
-    private ObjectProphecy $eventDispatcher;
-    private UrlShortenerOptions $options;
-
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->em = $this->prophesize(EntityManager::class);
-        $this->em->transactional(Argument::any())->will(function (array $args) {
-            [$callback] = $args;
-            return $callback();
-        });
-
-        $this->eventDispatcher = $this->prophesize(EventDispatcherInterface::class);
-        $this->options = new UrlShortenerOptions();
-
-        $this->visitsTracker = new VisitsTracker($this->em->reveal(), $this->eventDispatcher->reveal(), $this->options);
+        $this->em = $this->createMock(EntityManager::class);
+        $this->eventDispatcher = $this->createMock(EventDispatcherInterface::class);
     }
 
-    /**
-     * @test
-     * @dataProvider provideTrackingMethodNames
-     */
+    #[Test, DataProvider('provideTrackingMethodNames')]
     public function trackPersistsVisitAndDispatchesEvent(string $method, array $args): void
     {
-        $persist = $this->em->persist(Argument::that(fn (Visit $visit) => $visit->setId('1')))->will(function (): void {
-        });
+        $this->em->expects($this->once())->method('persist')->with(
+            $this->callback(fn (Visit $visit) => $visit->setId('1') !== null),
+        );
+        $this->em->expects($this->once())->method('flush');
+        $this->eventDispatcher->expects($this->once())->method('dispatch')->with(
+            $this->isInstanceOf(UrlVisited::class),
+        );
 
-        $this->visitsTracker->{$method}(...$args);
-
-        $persist->shouldHaveBeenCalledOnce();
-        $this->em->transactional(Argument::cetera())->shouldHaveBeenCalledOnce();
-        $this->em->flush()->shouldHaveBeenCalledOnce();
-        $this->eventDispatcher->dispatch(Argument::type(UrlVisited::class))->shouldHaveBeenCalled();
+        $this->visitsTracker()->{$method}(...$args);
     }
 
-    public function provideTrackingMethodNames(): iterable
+    #[Test, DataProvider('provideTrackingMethodNames')]
+    public function trackingIsSkippedCompletelyWhenDisabledFromOptions(string $method, array $args): void
     {
-        yield 'track' => ['track', [ShortUrl::createEmpty(), Visitor::emptyInstance()]];
+        $this->em->expects($this->never())->method('persist');
+        $this->em->expects($this->never())->method('flush');
+        $this->eventDispatcher->expects($this->never())->method('dispatch');
+
+        $this->visitsTracker(new TrackingOptions(disableTracking: true))->{$method}(...$args);
+    }
+
+    public static function provideTrackingMethodNames(): iterable
+    {
+        yield 'track' => ['track', [ShortUrl::createFake(), Visitor::emptyInstance()]];
         yield 'trackInvalidShortUrlVisit' => ['trackInvalidShortUrlVisit', [Visitor::emptyInstance()]];
         yield 'trackBaseUrlVisit' => ['trackBaseUrlVisit', [Visitor::emptyInstance()]];
         yield 'trackRegularNotFoundVisit' => ['trackRegularNotFoundVisit', [Visitor::emptyInstance()]];
     }
 
-    /**
-     * @test
-     * @dataProvider provideOrphanTrackingMethodNames
-     */
+    #[Test, DataProvider('provideOrphanTrackingMethodNames')]
     public function orphanVisitsAreNotTrackedWhenDisabled(string $method): void
     {
-        $this->options->trackOrphanVisits = false;
+        $this->em->expects($this->never())->method('persist');
+        $this->em->expects($this->never())->method('flush');
+        $this->eventDispatcher->expects($this->never())->method('dispatch');
 
-        $this->visitsTracker->{$method}(Visitor::emptyInstance());
-
-        $this->eventDispatcher->dispatch(Argument::cetera())->shouldNotHaveBeenCalled();
-        $this->em->transactional(Argument::cetera())->shouldNotHaveBeenCalled();
-        $this->em->persist(Argument::cetera())->shouldNotHaveBeenCalled();
-        $this->em->flush()->shouldNotHaveBeenCalled();
+        $this->visitsTracker(new TrackingOptions(trackOrphanVisits: false))->{$method}(Visitor::emptyInstance());
     }
 
-    public function provideOrphanTrackingMethodNames(): iterable
+    public static function provideOrphanTrackingMethodNames(): iterable
     {
         yield 'trackInvalidShortUrlVisit' => ['trackInvalidShortUrlVisit'];
         yield 'trackBaseUrlVisit' => ['trackBaseUrlVisit'];
         yield 'trackRegularNotFoundVisit' => ['trackRegularNotFoundVisit'];
+    }
+
+    private function visitsTracker(?TrackingOptions $options = null): VisitsTracker
+    {
+        return new VisitsTracker($this->em, $this->eventDispatcher, $options ?? new TrackingOptions());
     }
 }

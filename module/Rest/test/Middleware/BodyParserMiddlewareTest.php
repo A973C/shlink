@@ -7,125 +7,98 @@ namespace ShlinkioTest\Shlink\Rest\Middleware;
 use Laminas\Diactoros\Response;
 use Laminas\Diactoros\ServerRequest;
 use Laminas\Diactoros\Stream;
+use PHPUnit\Framework\Assert;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ProphecyInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
+use Shlinkio\Shlink\Core\Exception\MalformedBodyException;
 use Shlinkio\Shlink\Rest\Middleware\BodyParserMiddleware;
-
-use function array_shift;
 
 class BodyParserMiddlewareTest extends TestCase
 {
-    use ProphecyTrait;
-
     private BodyParserMiddleware $middleware;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
         $this->middleware = new BodyParserMiddleware();
     }
 
-    /**
-     * @test
-     * @dataProvider provideIgnoredRequestMethods
-     */
+    #[Test, DataProvider('provideIgnoredRequestMethods')]
     public function requestsFromOtherMethodsJustFallbackToNextMiddleware(string $method): void
     {
-        $request = $this->prophesize(ServerRequestInterface::class);
-        $request->getMethod()->willReturn($method);
-        $request->getParsedBody()->willReturn([]);
+        $request = $this->createMock(ServerRequestInterface::class);
+        $request->method('getMethod')->willReturn($method);
+        $request->method('getParsedBody')->willReturn([]);
 
-        self::assertHandlingRequestJustFallsBackToNext($request);
+        $this->assertHandlingRequestJustFallsBackToNext($request);
     }
 
-    public function provideIgnoredRequestMethods(): iterable
+    public static function provideIgnoredRequestMethods(): iterable
     {
         yield 'GET' => ['GET'];
         yield 'HEAD' => ['HEAD'];
         yield 'OPTIONS' => ['OPTIONS'];
     }
 
-    /** @test */
+    #[Test]
     public function requestsWithNonEmptyBodyJustFallbackToNextMiddleware(): void
     {
-        $request = $this->prophesize(ServerRequestInterface::class);
-        $request->getMethod()->willReturn('POST');
-        $request->getParsedBody()->willReturn(['foo' => 'bar']);
+        $request = $this->createMock(ServerRequestInterface::class);
+        $request->method('getMethod')->willReturn('POST');
+        $request->method('getParsedBody')->willReturn(['foo' => 'bar']);
 
-        self::assertHandlingRequestJustFallsBackToNext($request);
+        $this->assertHandlingRequestJustFallsBackToNext($request);
     }
 
-    private function assertHandlingRequestJustFallsBackToNext(ProphecyInterface $requestMock): void
+    private function assertHandlingRequestJustFallsBackToNext(MockObject & ServerRequestInterface $request): void
     {
-        $getContentType = $requestMock->getHeaderLine('Content-type')->willReturn('');
-        $request = $requestMock->reveal();
+        $request->expects($this->never())->method('getHeaderLine');
 
-        $nextHandler = $this->prophesize(RequestHandlerInterface::class);
-        $handle = $nextHandler->handle($request)->willReturn(new Response());
+        $nextHandler = $this->createMock(RequestHandlerInterface::class);
+        $nextHandler->expects($this->once())->method('handle')->with($request)->willReturn(new Response());
 
-        $this->middleware->process($request, $nextHandler->reveal());
-
-        $handle->shouldHaveBeenCalledOnce();
-        $getContentType->shouldNotHaveBeenCalled();
+        $this->middleware->process($request, $nextHandler);
     }
 
-    /** @test */
+    #[Test]
     public function jsonRequestsAreJsonDecoded(): void
     {
-        $test = $this;
         $body = new Stream('php://temp', 'wr');
         $body->write('{"foo": "bar", "bar": ["one", 5]}');
         $request = (new ServerRequest())->withMethod('PUT')
-                                        ->withBody($body)
-                                        ->withHeader('content-type', 'application/json');
-        $delegate = $this->prophesize(RequestHandlerInterface::class);
-        $process = $delegate->handle(Argument::type(ServerRequestInterface::class))->will(
-            function (array $args) use ($test) {
-                /** @var ServerRequestInterface $req */
-                $req = array_shift($args);
+                                        ->withBody($body);
+        $handler = $this->createMock(RequestHandlerInterface::class);
+        $handler->expects($this->once())->method('handle')->with(
+            $this->isInstanceOf(ServerRequestInterface::class),
+        )->willReturnCallback(function (ServerRequestInterface $req) {
+            Assert::assertEquals([
+                'foo' => 'bar',
+                'bar' => ['one', 5],
+            ], $req->getParsedBody());
 
-                $test->assertEquals([
-                    'foo' => 'bar',
-                    'bar' => ['one', 5],
-                ], $req->getParsedBody());
+            return new Response();
+        });
 
-                return new Response();
-            },
-        );
-
-        $this->middleware->process($request, $delegate->reveal());
-
-        $process->shouldHaveBeenCalledOnce();
+        $this->middleware->process($request, $handler);
     }
 
-    /** @test */
-    public function regularRequestsAreUrlDecoded(): void
+    #[Test]
+    public function invalidBodyResultsInException(): void
     {
-        $test = $this;
         $body = new Stream('php://temp', 'wr');
-        $body->write('foo=bar&bar[]=one&bar[]=5');
+        $body->write('{"foo": "bar", "bar": ["one');
         $request = (new ServerRequest())->withMethod('PUT')
                                         ->withBody($body);
-        $delegate = $this->prophesize(RequestHandlerInterface::class);
-        $process = $delegate->handle(Argument::type(ServerRequestInterface::class))->will(
-            function (array $args) use ($test) {
-                /** @var ServerRequestInterface $req */
-                $req = array_shift($args);
 
-                $test->assertEquals([
-                    'foo' => 'bar',
-                    'bar' => ['one', 5],
-                ], $req->getParsedBody());
+        $handler = $this->createMock(RequestHandlerInterface::class);
+        $handler->expects($this->never())->method('handle');
 
-                return new Response();
-            },
-        );
+        $this->expectException(MalformedBodyException::class);
+        $this->expectExceptionMessage('Provided request does not contain a valid JSON body.');
 
-        $this->middleware->process($request, $delegate->reveal());
-
-        $process->shouldHaveBeenCalledOnce();
+        $this->middleware->process($request, $handler);
     }
 }

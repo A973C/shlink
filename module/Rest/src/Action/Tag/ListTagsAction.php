@@ -7,47 +7,42 @@ namespace Shlinkio\Shlink\Rest\Action\Tag;
 use Laminas\Diactoros\Response\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use Shlinkio\Shlink\Common\Paginator\Util\PagerfantaUtilsTrait;
 use Shlinkio\Shlink\Core\Tag\Model\TagInfo;
+use Shlinkio\Shlink\Core\Tag\Model\TagsParams;
 use Shlinkio\Shlink\Core\Tag\TagServiceInterface;
 use Shlinkio\Shlink\Rest\Action\AbstractRestAction;
 use Shlinkio\Shlink\Rest\Middleware\AuthenticationMiddleware;
 
-use function Functional\map;
+use function array_map;
 
 class ListTagsAction extends AbstractRestAction
 {
+    use PagerfantaUtilsTrait;
+
     protected const ROUTE_PATH = '/tags';
     protected const ROUTE_ALLOWED_METHODS = [self::METHOD_GET];
 
-    private TagServiceInterface $tagService;
-
-    public function __construct(TagServiceInterface $tagService)
+    public function __construct(private TagServiceInterface $tagService)
     {
-        $this->tagService = $tagService;
     }
 
     public function handle(ServerRequestInterface $request): ResponseInterface
     {
-        $query = $request->getQueryParams();
-        $withStats = ($query['withStats'] ?? null) === 'true';
+        $params = TagsParams::fromRawData($request->getQueryParams());
         $apiKey = AuthenticationMiddleware::apiKeyFromRequest($request);
 
-        if (! $withStats) {
+        if (! $params->withStats) {
             return new JsonResponse([
-                'tags' => [
-                    'data' => $this->tagService->listTags($apiKey),
-                ],
+                'tags' => $this->serializePaginator($this->tagService->listTags($params, $apiKey)),
             ]);
         }
 
-        $tagsInfo = $this->tagService->tagsInfo($apiKey);
-        $data = map($tagsInfo, fn (TagInfo $info) => (string) $info->tag());
+        // This part is deprecated. To get tags with stats, the /tags/stats endpoint should be used instead
+        $tagsInfo = $this->tagService->tagsInfo($params, $apiKey);
+        $rawTags = $this->serializePaginator($tagsInfo, dataProp: 'stats');
+        $rawTags['data'] = array_map(static fn (TagInfo $info) => $info->tag, [...$tagsInfo]);
 
-        return new JsonResponse([
-            'tags' => [
-                'data' => $data,
-                'stats' => $tagsInfo,
-            ],
-        ]);
+        return new JsonResponse(['tags' => $rawTags]);
     }
 }

@@ -4,57 +4,65 @@ declare(strict_types=1);
 
 namespace ShlinkioTest\Shlink\CLI\Command\Tag;
 
+use Pagerfanta\Adapter\ArrayAdapter;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Prophecy\ObjectProphecy;
 use Shlinkio\Shlink\CLI\Command\Tag\ListTagsCommand;
-use Shlinkio\Shlink\Core\Entity\Tag;
+use Shlinkio\Shlink\Common\Paginator\Paginator;
 use Shlinkio\Shlink\Core\Tag\Model\TagInfo;
 use Shlinkio\Shlink\Core\Tag\TagServiceInterface;
-use ShlinkioTest\Shlink\CLI\CliTestUtilsTrait;
+use ShlinkioTest\Shlink\CLI\Util\CliTestUtils;
 use Symfony\Component\Console\Tester\CommandTester;
 
 class ListTagsCommandTest extends TestCase
 {
-    use CliTestUtilsTrait;
-
     private CommandTester $commandTester;
-    private ObjectProphecy $tagService;
+    private MockObject & TagServiceInterface $tagService;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->tagService = $this->prophesize(TagServiceInterface::class);
-        $this->commandTester = $this->testerForCommand(new ListTagsCommand($this->tagService->reveal()));
+        $this->tagService = $this->createMock(TagServiceInterface::class);
+        $this->commandTester = CliTestUtils::testerForCommand(new ListTagsCommand($this->tagService));
     }
 
-    /** @test */
+    #[Test]
     public function noTagsPrintsEmptyMessage(): void
     {
-        $tagsInfo = $this->tagService->tagsInfo()->willReturn([]);
+        $this->tagService->expects($this->once())->method('tagsInfo')->withAnyParameters()->willReturn(
+            new Paginator(new ArrayAdapter([])),
+        );
 
         $this->commandTester->execute([]);
         $output = $this->commandTester->getDisplay();
 
         self::assertStringContainsString('No tags found', $output);
-        $tagsInfo->shouldHaveBeenCalled();
     }
 
-    /** @test */
+    #[Test]
     public function listOfTagsIsPrinted(): void
     {
-        $tagsInfo = $this->tagService->tagsInfo()->willReturn([
-            new TagInfo(new Tag('foo'), 10, 2),
-            new TagInfo(new Tag('bar'), 7, 32),
-        ]);
+        $this->tagService->expects($this->once())->method('tagsInfo')->withAnyParameters()->willReturn(
+            new Paginator(new ArrayAdapter([
+                new TagInfo('foo', 10, 2),
+                new TagInfo('bar', 7, 32),
+            ])),
+        );
 
         $this->commandTester->execute([]);
         $output = $this->commandTester->getDisplay();
 
-        self::assertStringContainsString('| foo', $output);
-        self::assertStringContainsString('| bar', $output);
-        self::assertStringContainsString('| 10 ', $output);
-        self::assertStringContainsString('| 2 ', $output);
-        self::assertStringContainsString('| 7 ', $output);
-        self::assertStringContainsString('| 32 ', $output);
-        $tagsInfo->shouldHaveBeenCalled();
+        self::assertEquals(
+            <<<OUTPUT
+            +------+-------------+---------------+
+            | Name | URLs amount | Visits amount |
+            +------+-------------+---------------+
+            | foo  | 10          | 2             |
+            | bar  | 7           | 32            |
+            +------+-------------+---------------+
+            
+            OUTPUT,
+            $output,
+        );
     }
 }

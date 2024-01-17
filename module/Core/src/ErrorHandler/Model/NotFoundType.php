@@ -7,51 +7,44 @@ namespace Shlinkio\Shlink\Core\ErrorHandler\Model;
 use Mezzio\Router\RouteResult;
 use Psr\Http\Message\ServerRequestInterface;
 use Shlinkio\Shlink\Core\Action\RedirectAction;
-use Shlinkio\Shlink\Core\Entity\Visit;
+use Shlinkio\Shlink\Core\Visit\Model\VisitType;
 
 use function rtrim;
 
 class NotFoundType
 {
-    private string $type;
-
-    private function __construct(string $type)
+    private function __construct(private readonly ?VisitType $type)
     {
-        $this->type = $type;
     }
 
     public static function fromRequest(ServerRequestInterface $request, string $basePath): self
     {
-        $isBaseUrl = rtrim($request->getUri()->getPath(), '/') === $basePath;
-        if ($isBaseUrl) {
-            return new self(Visit::TYPE_BASE_URL);
-        }
-
         /** @var RouteResult $routeResult */
-        $routeResult = $request->getAttribute(RouteResult::class, RouteResult::fromRouteFailure(null));
-        if ($routeResult->isFailure()) {
-            return new self(Visit::TYPE_REGULAR_404);
-        }
+        $routeResult = $request->getAttribute(RouteResult::class) ?? RouteResult::fromRouteFailure(null);
+        $isBaseUrl = rtrim($request->getUri()->getPath(), '/') === $basePath;
 
-        if ($routeResult->getMatchedRouteName() === RedirectAction::class) {
-            return new self(Visit::TYPE_INVALID_SHORT_URL);
-        }
+        $type = match (true) {
+            $isBaseUrl => VisitType::BASE_URL,
+            $routeResult->isFailure() => VisitType::REGULAR_404,
+            $routeResult->getMatchedRouteName() === RedirectAction::class => VisitType::INVALID_SHORT_URL,
+            default => null,
+        };
 
-        return new self(self::class);
+        return new self($type);
     }
 
     public function isBaseUrl(): bool
     {
-        return $this->type === Visit::TYPE_BASE_URL;
+        return $this->type === VisitType::BASE_URL;
     }
 
     public function isRegularNotFound(): bool
     {
-        return $this->type === Visit::TYPE_REGULAR_404;
+        return $this->type === VisitType::REGULAR_404;
     }
 
     public function isInvalidShortUrl(): bool
     {
-        return $this->type === Visit::TYPE_INVALID_SHORT_URL;
+        return $this->type === VisitType::INVALID_SHORT_URL;
     }
 }

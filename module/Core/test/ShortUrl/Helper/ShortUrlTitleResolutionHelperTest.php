@@ -4,44 +4,44 @@ declare(strict_types=1);
 
 namespace ShlinkioTest\Shlink\Core\ShortUrl\Helper;
 
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
-use Shlinkio\Shlink\Core\Model\ShortUrlMeta;
 use Shlinkio\Shlink\Core\ShortUrl\Helper\ShortUrlTitleResolutionHelper;
+use Shlinkio\Shlink\Core\ShortUrl\Model\ShortUrlCreation;
 use Shlinkio\Shlink\Core\Util\UrlValidatorInterface;
 
 class ShortUrlTitleResolutionHelperTest extends TestCase
 {
-    use ProphecyTrait;
-
     private ShortUrlTitleResolutionHelper $helper;
-    private ObjectProphecy $urlValidator;
+    private MockObject & UrlValidatorInterface $urlValidator;
 
     protected function setUp(): void
     {
-        $this->urlValidator = $this->prophesize(UrlValidatorInterface::class);
-        $this->helper = new ShortUrlTitleResolutionHelper($this->urlValidator->reveal());
+        $this->urlValidator = $this->createMock(UrlValidatorInterface::class);
+        $this->helper = new ShortUrlTitleResolutionHelper($this->urlValidator);
     }
 
-    /**
-     * @test
-     * @dataProvider provideTitles
-     */
+    #[Test, DataProvider('provideTitles')]
     public function urlIsProperlyShortened(?string $title, int $validateWithTitleCallsNum, int $validateCallsNum): void
     {
         $longUrl = 'http://foobar.com/12345/hello?foo=bar';
-        $this->helper->processTitleAndValidateUrl(
-            ShortUrlMeta::fromRawData(['longUrl' => $longUrl, 'title' => $title]),
+        $this->urlValidator->expects($this->exactly($validateWithTitleCallsNum))->method('validateUrlWithTitle')->with(
+            $longUrl,
+            $this->isFalse(),
+        );
+        $this->urlValidator->expects($this->exactly($validateCallsNum))->method('validateUrl')->with(
+            $longUrl,
+            $this->isFalse(),
         );
 
-        $this->urlValidator->validateUrlWithTitle($longUrl, null)->shouldHaveBeenCalledTimes(
-            $validateWithTitleCallsNum,
+        $this->helper->processTitleAndValidateUrl(
+            ShortUrlCreation::fromRawData(['longUrl' => $longUrl, 'title' => $title]),
         );
-        $this->urlValidator->validateUrl($longUrl, null)->shouldHaveBeenCalledTimes($validateCallsNum);
     }
 
-    public function provideTitles(): iterable
+    public static function provideTitles(): iterable
     {
         yield 'no title' => [null, 1, 0];
         yield 'title' => ['link title', 0, 1];

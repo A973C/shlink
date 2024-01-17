@@ -5,14 +5,16 @@ declare(strict_types=1);
 namespace ShlinkioTest\Shlink\Core\Domain;
 
 use Doctrine\ORM\EntityManagerInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
+use Shlinkio\Shlink\Core\Config\EmptyNotFoundRedirectConfig;
+use Shlinkio\Shlink\Core\Config\NotFoundRedirects;
 use Shlinkio\Shlink\Core\Domain\DomainService;
+use Shlinkio\Shlink\Core\Domain\Entity\Domain;
 use Shlinkio\Shlink\Core\Domain\Model\DomainItem;
 use Shlinkio\Shlink\Core\Domain\Repository\DomainRepositoryInterface;
-use Shlinkio\Shlink\Core\Entity\Domain;
 use Shlinkio\Shlink\Core\Exception\DomainNotFoundException;
 use Shlinkio\Shlink\Rest\ApiKey\Model\ApiKeyMeta;
 use Shlinkio\Shlink\Rest\ApiKey\Model\RoleDefinition;
@@ -20,128 +22,178 @@ use Shlinkio\Shlink\Rest\Entity\ApiKey;
 
 class DomainServiceTest extends TestCase
 {
-    use ProphecyTrait;
-
     private DomainService $domainService;
-    private ObjectProphecy $em;
+    private MockObject & EntityManagerInterface $em;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->em = $this->prophesize(EntityManagerInterface::class);
-        $this->domainService = new DomainService($this->em->reveal(), 'default.com');
+        $this->em = $this->createMock(EntityManagerInterface::class);
+        $this->domainService = new DomainService($this->em, 'default.com');
     }
 
-    /**
-     * @test
-     * @dataProvider provideExcludedDomains
-     */
+    #[Test, DataProvider('provideExcludedDomains')]
     public function listDomainsDelegatesIntoRepository(array $domains, array $expectedResult, ?ApiKey $apiKey): void
     {
-        $repo = $this->prophesize(DomainRepositoryInterface::class);
-        $getRepo = $this->em->getRepository(Domain::class)->willReturn($repo->reveal());
-        $findDomains = $repo->findDomainsWithout('default.com', $apiKey)->willReturn($domains);
+        $repo = $this->createMock(DomainRepositoryInterface::class);
+        $repo->expects($this->once())->method('findDomains')->with($apiKey)->willReturn($domains);
+        $this->em->expects($this->once())->method('getRepository')->with(Domain::class)->willReturn($repo);
 
         $result = $this->domainService->listDomains($apiKey);
 
         self::assertEquals($expectedResult, $result);
-        $getRepo->shouldHaveBeenCalledOnce();
-        $findDomains->shouldHaveBeenCalledOnce();
     }
 
-    public function provideExcludedDomains(): iterable
+    public static function provideExcludedDomains(): iterable
     {
-        $default = new DomainItem('default.com', true);
+        $default = DomainItem::forDefaultDomain('default.com', new EmptyNotFoundRedirectConfig());
         $adminApiKey = ApiKey::create();
+        $domain = Domain::withAuthority('');
+        $domain->setId('123');
         $domainSpecificApiKey = ApiKey::fromMeta(
-            ApiKeyMeta::withRoles(RoleDefinition::forDomain((new Domain(''))->setId('123'))),
+            ApiKeyMeta::withRoles(RoleDefinition::forDomain($domain)),
         );
 
         yield 'empty list without API key' => [[], [$default], null];
         yield 'one item without API key' => [
-            [new Domain('bar.com')],
-            [$default, new DomainItem('bar.com', false)],
+            [Domain::withAuthority('bar.com')],
+            [$default, DomainItem::forNonDefaultDomain(Domain::withAuthority('bar.com'))],
             null,
         ];
         yield 'multiple items without API key' => [
-            [new Domain('foo.com'), new Domain('bar.com')],
-            [$default, new DomainItem('foo.com', false), new DomainItem('bar.com', false)],
+            [Domain::withAuthority('foo.com'), Domain::withAuthority('bar.com')],
+            [
+                $default,
+                DomainItem::forNonDefaultDomain(Domain::withAuthority('foo.com')),
+                DomainItem::forNonDefaultDomain(Domain::withAuthority('bar.com')),
+            ],
             null,
         ];
 
         yield 'empty list with admin API key' => [[], [$default], $adminApiKey];
         yield 'one item with admin API key' => [
-            [new Domain('bar.com')],
-            [$default, new DomainItem('bar.com', false)],
+            [Domain::withAuthority('bar.com')],
+            [$default, DomainItem::forNonDefaultDomain(Domain::withAuthority('bar.com'))],
             $adminApiKey,
         ];
         yield 'multiple items with admin API key' => [
-            [new Domain('foo.com'), new Domain('bar.com')],
-            [$default, new DomainItem('foo.com', false), new DomainItem('bar.com', false)],
+            [Domain::withAuthority('foo.com'), Domain::withAuthority('bar.com')],
+            [
+                $default,
+                DomainItem::forNonDefaultDomain(Domain::withAuthority('foo.com')),
+                DomainItem::forNonDefaultDomain(Domain::withAuthority('bar.com')),
+            ],
             $adminApiKey,
         ];
 
         yield 'empty list with domain-specific API key' => [[], [], $domainSpecificApiKey];
         yield 'one item with domain-specific API key' => [
-            [new Domain('bar.com')],
-            [new DomainItem('bar.com', false)],
+            [Domain::withAuthority('bar.com')],
+            [DomainItem::forNonDefaultDomain(Domain::withAuthority('bar.com'))],
             $domainSpecificApiKey,
         ];
         yield 'multiple items with domain-specific API key' => [
-            [new Domain('foo.com'), new Domain('bar.com')],
-            [new DomainItem('foo.com', false), new DomainItem('bar.com', false)],
+            [Domain::withAuthority('foo.com'), Domain::withAuthority('bar.com')],
+            [
+                DomainItem::forNonDefaultDomain(Domain::withAuthority('foo.com')),
+                DomainItem::forNonDefaultDomain(Domain::withAuthority('bar.com')),
+            ],
             $domainSpecificApiKey,
         ];
     }
 
-    /** @test */
+    #[Test]
     public function getDomainThrowsExceptionWhenDomainIsNotFound(): void
     {
-        $find = $this->em->find(Domain::class, '123')->willReturn(null);
+        $this->em->expects($this->once())->method('find')->with(Domain::class, '123')->willReturn(null);
 
         $this->expectException(DomainNotFoundException::class);
-        $find->shouldBeCalledOnce();
 
         $this->domainService->getDomain('123');
     }
 
-    /** @test */
+    #[Test]
     public function getDomainReturnsEntityWhenFound(): void
     {
-        $domain = new Domain('');
-        $find = $this->em->find(Domain::class, '123')->willReturn($domain);
+        $domain = Domain::withAuthority('');
+        $this->em->expects($this->once())->method('find')->with(Domain::class, '123')->willReturn($domain);
 
         $result = $this->domainService->getDomain('123');
 
         self::assertSame($domain, $result);
-        $find->shouldHaveBeenCalledOnce();
     }
 
-    /**
-     * @test
-     * @dataProvider provideFoundDomains
-     */
-    public function getOrCreateAlwaysPersistsDomain(?Domain $foundDomain): void
+    #[Test, DataProvider('provideFoundDomains')]
+    public function getOrCreateAlwaysPersistsDomain(?Domain $foundDomain, ?ApiKey $apiKey): void
     {
         $authority = 'example.com';
-        $repo = $this->prophesize(DomainRepositoryInterface::class);
-        $repo->findOneBy(['authority' => $authority])->willReturn($foundDomain);
-        $getRepo = $this->em->getRepository(Domain::class)->willReturn($repo->reveal());
-        $persist = $this->em->persist($foundDomain !== null ? $foundDomain : Argument::type(Domain::class));
-        $flush = $this->em->flush();
+        $repo = $this->createMock(DomainRepositoryInterface::class);
+        $repo->method('findOneByAuthority')->with($authority, $apiKey)->willReturn(
+            $foundDomain,
+        );
+        $this->em->expects($this->once())->method('getRepository')->with(Domain::class)->willReturn($repo);
+        $this->em->expects($this->once())->method('persist')->with($foundDomain ?? $this->isInstanceOf(Domain::class));
+        $this->em->expects($this->once())->method('flush');
 
-        $result = $this->domainService->getOrCreate($authority);
+        $result = $this->domainService->getOrCreate($authority, $apiKey);
 
         if ($foundDomain !== null) {
             self::assertSame($result, $foundDomain);
         }
-        $getRepo->shouldHaveBeenCalledOnce();
-        $persist->shouldHaveBeenCalledOnce();
-        $flush->shouldHaveBeenCalledOnce();
     }
 
-    public function provideFoundDomains(): iterable
+    #[Test]
+    public function getOrCreateThrowsExceptionForApiKeysWithDomainRole(): void
     {
-        yield 'domain not found' => [null];
-        yield 'domain found' => [new Domain('')];
+        $authority = 'example.com';
+        $domain = Domain::withAuthority($authority);
+        $domain->setId('1');
+        $apiKey = ApiKey::fromMeta(ApiKeyMeta::withRoles(RoleDefinition::forDomain($domain)));
+        $repo = $this->createMock(DomainRepositoryInterface::class);
+        $repo->method('findOneByAuthority')->with($authority, $apiKey)->willReturn(null);
+        $this->em->expects($this->once())->method('getRepository')->with(Domain::class)->willReturn($repo);
+        $this->em->expects($this->never())->method('persist');
+        $this->em->expects($this->never())->method('flush');
+
+        $this->expectException(DomainNotFoundException::class);
+
+        $this->domainService->getOrCreate($authority, $apiKey);
+    }
+
+    #[Test, DataProvider('provideFoundDomains')]
+    public function configureNotFoundRedirectsConfiguresFetchedDomain(?Domain $foundDomain, ?ApiKey $apiKey): void
+    {
+        $authority = 'example.com';
+        $repo = $this->createMock(DomainRepositoryInterface::class);
+        $repo->method('findOneByAuthority')->with($authority, $apiKey)->willReturn($foundDomain);
+        $this->em->expects($this->once())->method('getRepository')->with(Domain::class)->willReturn($repo);
+        $this->em->expects($this->once())->method('persist')->with($foundDomain ?? $this->isInstanceOf(Domain::class));
+        $this->em->expects($this->once())->method('flush');
+
+        $result = $this->domainService->configureNotFoundRedirects($authority, NotFoundRedirects::withRedirects(
+            'foo.com',
+            'bar.com',
+            'baz.com',
+        ), $apiKey);
+
+        if ($foundDomain !== null) {
+            self::assertSame($result, $foundDomain);
+        }
+        self::assertEquals('foo.com', $result->baseUrlRedirect());
+        self::assertEquals('bar.com', $result->regular404Redirect());
+        self::assertEquals('baz.com', $result->invalidShortUrlRedirect());
+    }
+
+    public static function provideFoundDomains(): iterable
+    {
+        $domain = Domain::withAuthority('');
+        $adminApiKey = ApiKey::create();
+        $authorApiKey = ApiKey::fromMeta(ApiKeyMeta::withRoles(RoleDefinition::forAuthoredShortUrls()));
+
+        yield 'domain not found and no API key' => [null, null];
+        yield 'domain found and no API key' => [$domain, null];
+        yield 'domain not found and admin API key' => [null, $adminApiKey];
+        yield 'domain found and admin API key' => [$domain, $adminApiKey];
+        yield 'domain not found and author API key' => [null, $authorApiKey];
+        yield 'domain found and author API key' => [$domain, $authorApiKey];
     }
 }

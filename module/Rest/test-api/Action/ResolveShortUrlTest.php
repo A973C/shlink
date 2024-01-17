@@ -6,19 +6,18 @@ namespace ShlinkioApiTest\Shlink\Rest\Action;
 
 use Cake\Chronos\Chronos;
 use GuzzleHttp\RequestOptions;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\DataProviderExternal;
+use PHPUnit\Framework\Attributes\Test;
 use Shlinkio\Shlink\TestUtils\ApiTest\ApiTestCase;
-use ShlinkioApiTest\Shlink\Rest\Utils\NotFoundUrlHelpersTrait;
+use ShlinkioApiTest\Shlink\Rest\Utils\ApiTestDataProviders;
+use ShlinkioApiTest\Shlink\Rest\Utils\UrlBuilder;
 
 use function sprintf;
 
 class ResolveShortUrlTest extends ApiTestCase
 {
-    use NotFoundUrlHelpersTrait;
-
-    /**
-     * @test
-     * @dataProvider provideDisabledMeta
-     */
+    #[Test, DataProvider('provideDisabledMeta')]
     public function shortUrlIsProperlyResolvedEvenWhenNotEnabled(array $disabledMeta): void
     {
         $shortCode = 'abc123';
@@ -34,26 +33,27 @@ class ResolveShortUrlTest extends ApiTestCase
         self::assertEquals(self::STATUS_OK, $fetchResp->getStatusCode());
     }
 
-    public function provideDisabledMeta(): iterable
+    public static function provideDisabledMeta(): iterable
     {
         $now = Chronos::now();
 
-        yield 'future validSince' => [['validSince' => $now->addMonth()->toAtomString()]];
-        yield 'past validUntil' => [['validUntil' => $now->subMonth()->toAtomString()]];
+        yield 'future validSince' => [['validSince' => $now->addMonths(1)->toAtomString()]];
+        yield 'past validUntil' => [['validUntil' => $now->subMonths(1)->toAtomString()]];
         yield 'maxVisits reached' => [['maxVisits' => 1]];
     }
 
-    /**
-     * @test
-     * @dataProvider provideInvalidUrls
-     */
+    #[Test, DataProviderExternal(ApiTestDataProviders::class, 'invalidUrlsProvider')]
     public function tryingToResolveInvalidUrlReturnsNotFoundError(
         string $shortCode,
         ?string $domain,
         string $expectedDetail,
-        string $apiKey
+        string $apiKey,
     ): void {
-        $resp = $this->callApiWithKey(self::METHOD_GET, $this->buildShortUrlPath($shortCode, $domain), [], $apiKey);
+        $resp = $this->callApiWithKey(
+            self::METHOD_GET,
+            UrlBuilder::buildShortUrlPath($shortCode, $domain),
+            apiKey: $apiKey,
+        );
         $payload = $this->getJsonResponsePayload($resp);
 
         self::assertEquals(self::STATUS_NOT_FOUND, $resp->getStatusCode());

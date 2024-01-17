@@ -17,24 +17,17 @@ use Shlinkio\Shlink\Rest\Exception\MissingAuthenticationException;
 use Shlinkio\Shlink\Rest\Exception\VerifyAuthenticationException;
 use Shlinkio\Shlink\Rest\Service\ApiKeyServiceInterface;
 
-use function Functional\contains;
+use function Shlinkio\Shlink\Core\ArrayUtils\contains;
 
 class AuthenticationMiddleware implements MiddlewareInterface, StatusCodeInterface, RequestMethodInterface
 {
     public const API_KEY_HEADER = 'X-Api-Key';
 
-    private ApiKeyServiceInterface $apiKeyService;
-    private array $routesWithoutApiKey;
-    private array $routesWithQueryApiKey;
-
     public function __construct(
-        ApiKeyServiceInterface $apiKeyService,
-        array $routesWithoutApiKey,
-        array $routesWithQueryApiKey
+        private readonly ApiKeyServiceInterface $apiKeyService,
+        private readonly array $routesWithoutApiKey,
+        private readonly array $routesWithQueryApiKey,
     ) {
-        $this->apiKeyService = $apiKeyService;
-        $this->routesWithoutApiKey = $routesWithoutApiKey;
-        $this->routesWithQueryApiKey = $routesWithQueryApiKey;
     }
 
     public function process(Request $request, RequestHandlerInterface $handler): Response
@@ -45,7 +38,7 @@ class AuthenticationMiddleware implements MiddlewareInterface, StatusCodeInterfa
             $routeResult === null
             || $routeResult->isFailure()
             || $request->getMethod() === self::METHOD_OPTIONS
-            || contains($this->routesWithoutApiKey, $routeResult->getMatchedRouteName())
+            || contains($routeResult->getMatchedRouteName(), $this->routesWithoutApiKey)
         ) {
             return $handler->handle($request);
         }
@@ -56,7 +49,7 @@ class AuthenticationMiddleware implements MiddlewareInterface, StatusCodeInterfa
             throw VerifyAuthenticationException::forInvalidApiKey();
         }
 
-        return $handler->handle($request->withAttribute(ApiKey::class, $result->apiKey()));
+        return $handler->handle($request->withAttribute(ApiKey::class, $result->apiKey));
     }
 
     public static function apiKeyFromRequest(Request $request): ApiKey
@@ -68,7 +61,7 @@ class AuthenticationMiddleware implements MiddlewareInterface, StatusCodeInterfa
     {
         $routeName = $routeResult->getMatchedRouteName();
         $query = $request->getQueryParams();
-        $isRouteWithApiKeyInQuery = contains($this->routesWithQueryApiKey, $routeName);
+        $isRouteWithApiKeyInQuery = contains($routeName, $this->routesWithQueryApiKey);
         $apiKey = $isRouteWithApiKeyInQuery ? ($query['apiKey'] ?? '') : $request->getHeaderLine(self::API_KEY_HEADER);
 
         if (empty($apiKey)) {

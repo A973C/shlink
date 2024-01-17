@@ -9,9 +9,9 @@ use Doctrine\Common\DataFixtures\AbstractFixture;
 use Doctrine\Common\DataFixtures\DependentFixtureInterface;
 use Doctrine\Persistence\ObjectManager;
 use ReflectionObject;
-use Shlinkio\Shlink\Core\Entity\ShortUrl;
-use Shlinkio\Shlink\Core\Entity\Visit;
-use Shlinkio\Shlink\Core\Model\Visitor;
+use Shlinkio\Shlink\Core\ShortUrl\Entity\ShortUrl;
+use Shlinkio\Shlink\Core\Visit\Entity\Visit;
+use Shlinkio\Shlink\Core\Visit\Model\Visitor;
 
 class VisitsFixture extends AbstractFixture implements DependentFixtureInterface
 {
@@ -36,7 +36,7 @@ class VisitsFixture extends AbstractFixture implements DependentFixtureInterface
         /** @var ShortUrl $defShortUrl */
         $defShortUrl = $this->getReference('def456_short_url');
         $manager->persist(
-            Visit::forValidShortUrl($defShortUrl, new Visitor('shlink-tests-agent', '', '127.0.0.1', '')),
+            Visit::forValidShortUrl($defShortUrl, new Visitor('cf-facebook', '', '127.0.0.1', '')),
         );
         $manager->persist(
             Visit::forValidShortUrl($defShortUrl, new Visitor('shlink-tests-agent', 'https://app.shlink.io', '', '')),
@@ -50,15 +50,15 @@ class VisitsFixture extends AbstractFixture implements DependentFixtureInterface
         );
 
         $manager->persist($this->setVisitDate(
-            Visit::forBasePath(new Visitor('shlink-tests-agent', 'https://doma.in', '1.2.3.4', '')),
+            Visit::forBasePath(new Visitor('shlink-tests-agent', 'https://s.test', '1.2.3.4', '')),
             '2020-01-01',
         ));
         $manager->persist($this->setVisitDate(
-            Visit::forRegularNotFound(new Visitor('shlink-tests-agent', 'https://doma.in/foo/bar', '1.2.3.4', '')),
+            Visit::forRegularNotFound(new Visitor('shlink-tests-agent', 'https://s.test/foo/bar', '1.2.3.4', '')),
             '2020-02-01',
         ));
         $manager->persist($this->setVisitDate(
-            Visit::forInvalidShortUrl(new Visitor('shlink-tests-agent', 'https://doma.in/foo', '1.2.3.4', 'foo.com')),
+            Visit::forInvalidShortUrl(new Visitor('cf-facebook', 'https://s.test/foo', '1.2.3.4', 'foo.com')),
             '2020-03-01',
         ));
 

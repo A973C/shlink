@@ -4,15 +4,18 @@ declare(strict_types=1);
 
 namespace Shlinkio\Shlink\Core\Options;
 
-use Laminas\Stdlib\AbstractOptions;
+use Shlinkio\Shlink\Core\Config\NotFoundRedirectConfigInterface;
 
-class NotFoundRedirectOptions extends AbstractOptions
+final class NotFoundRedirectOptions implements NotFoundRedirectConfigInterface
 {
-    private ?string $invalidShortUrl = null;
-    private ?string $regular404 = null;
-    private ?string $baseUrl = null;
+    public function __construct(
+        public readonly ?string $invalidShortUrl = null,
+        public readonly ?string $regular404 = null,
+        public readonly ?string $baseUrl = null,
+    ) {
+    }
 
-    public function getInvalidShortUrlRedirect(): ?string
+    public function invalidShortUrlRedirect(): ?string
     {
         return $this->invalidShortUrl;
     }
@@ -22,13 +25,7 @@ class NotFoundRedirectOptions extends AbstractOptions
         return $this->invalidShortUrl !== null;
     }
 
-    protected function setInvalidShortUrl(?string $invalidShortUrl): self
-    {
-        $this->invalidShortUrl = $invalidShortUrl;
-        return $this;
-    }
-
-    public function getRegular404Redirect(): ?string
+    public function regular404Redirect(): ?string
     {
         return $this->regular404;
     }
@@ -38,13 +35,7 @@ class NotFoundRedirectOptions extends AbstractOptions
         return $this->regular404 !== null;
     }
 
-    protected function setRegular404(?string $regular404): self
-    {
-        $this->regular404 = $regular404;
-        return $this;
-    }
-
-    public function getBaseUrlRedirect(): ?string
+    public function baseUrlRedirect(): ?string
     {
         return $this->baseUrl;
     }
@@ -52,11 +43,5 @@ class NotFoundRedirectOptions extends AbstractOptions
     public function hasBaseUrlRedirect(): bool
     {
         return $this->baseUrl !== null;
-    }
-
-    protected function setBaseUrl(?string $baseUrl): self
-    {
-        $this->baseUrl = $baseUrl;
-        return $this;
     }
 }

@@ -6,164 +6,281 @@ namespace ShlinkioTest\Shlink\Core\Visit;
 
 use Doctrine\ORM\EntityManagerInterface;
 use Laminas\Stdlib\ArrayUtils;
+use PHPUnit\Framework\Assert;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\DataProviderExternal;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
-use Shlinkio\Shlink\Common\Util\DateRange;
-use Shlinkio\Shlink\Core\Entity\ShortUrl;
-use Shlinkio\Shlink\Core\Entity\Tag;
-use Shlinkio\Shlink\Core\Entity\Visit;
+use Shlinkio\Shlink\Core\Domain\Entity\Domain;
+use Shlinkio\Shlink\Core\Domain\Repository\DomainRepository;
+use Shlinkio\Shlink\Core\Exception\DomainNotFoundException;
 use Shlinkio\Shlink\Core\Exception\ShortUrlNotFoundException;
 use Shlinkio\Shlink\Core\Exception\TagNotFoundException;
-use Shlinkio\Shlink\Core\Model\ShortUrlIdentifier;
-use Shlinkio\Shlink\Core\Model\Visitor;
-use Shlinkio\Shlink\Core\Model\VisitsParams;
-use Shlinkio\Shlink\Core\Repository\ShortUrlRepositoryInterface;
-use Shlinkio\Shlink\Core\Repository\TagRepository;
-use Shlinkio\Shlink\Core\Repository\VisitRepository;
+use Shlinkio\Shlink\Core\ShortUrl\Entity\ShortUrl;
+use Shlinkio\Shlink\Core\ShortUrl\Model\ShortUrlIdentifier;
+use Shlinkio\Shlink\Core\ShortUrl\Repository\ShortUrlRepositoryInterface;
+use Shlinkio\Shlink\Core\Tag\Entity\Tag;
+use Shlinkio\Shlink\Core\Tag\Repository\TagRepository;
+use Shlinkio\Shlink\Core\Visit\Entity\Visit;
+use Shlinkio\Shlink\Core\Visit\Model\Visitor;
+use Shlinkio\Shlink\Core\Visit\Model\VisitsParams;
 use Shlinkio\Shlink\Core\Visit\Model\VisitsStats;
+use Shlinkio\Shlink\Core\Visit\Persistence\VisitsCountFiltering;
+use Shlinkio\Shlink\Core\Visit\Persistence\VisitsListFiltering;
+use Shlinkio\Shlink\Core\Visit\Repository\VisitRepository;
 use Shlinkio\Shlink\Core\Visit\VisitsStatsHelper;
 use Shlinkio\Shlink\Rest\Entity\ApiKey;
-use ShlinkioTest\Shlink\Core\Util\ApiKeyHelpersTrait;
+use ShlinkioTest\Shlink\Core\Util\ApiKeyDataProviders;
 
+use function array_map;
 use function count;
-use function Functional\map;
 use function range;
 
 class VisitsStatsHelperTest extends TestCase
 {
-    use ApiKeyHelpersTrait;
-    use ProphecyTrait;
-
     private VisitsStatsHelper $helper;
-    private ObjectProphecy $em;
+    private MockObject & EntityManagerInterface $em;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->em = $this->prophesize(EntityManagerInterface::class);
-        $this->helper = new VisitsStatsHelper($this->em->reveal());
+        $this->em = $this->createMock(EntityManagerInterface::class);
+        $this->helper = new VisitsStatsHelper($this->em);
     }
 
-    /**
-     * @test
-     * @dataProvider provideCounts
-     */
-    public function returnsExpectedVisitsStats(int $expectedCount): void
+    #[Test, DataProvider('provideCounts')]
+    public function returnsExpectedVisitsStats(int $expectedCount, ?ApiKey $apiKey): void
     {
-        $repo = $this->prophesize(VisitRepository::class);
-        $count = $repo->countVisits(null)->willReturn($expectedCount * 3);
-        $countOrphan = $repo->countOrphanVisits()->willReturn($expectedCount);
-        $getRepo = $this->em->getRepository(Visit::class)->willReturn($repo->reveal());
+        $repo = $this->createMock(VisitRepository::class);
+        $callCount = 0;
+        $repo->expects($this->exactly(2))->method('countNonOrphanVisits')->willReturnCallback(
+            function (VisitsCountFiltering $options) use ($expectedCount, $apiKey, &$callCount) {
+                Assert::assertEquals($callCount !== 0, $options->excludeBots);
+                Assert::assertEquals($apiKey, $options->apiKey);
+                $callCount++;
 
-        $stats = $this->helper->getVisitsStats();
+                return $expectedCount * 3;
+            },
+        );
+        $repo->expects($this->exactly(2))->method('countOrphanVisits')->with(
+            $this->isInstanceOf(VisitsCountFiltering::class),
+        )->willReturn($expectedCount);
+        $this->em->expects($this->once())->method('getRepository')->with(Visit::class)->willReturn($repo);
+
+        $stats = $this->helper->getVisitsStats($apiKey);
 
         self::assertEquals(new VisitsStats($expectedCount * 3, $expectedCount), $stats);
-        $count->shouldHaveBeenCalledOnce();
-        $countOrphan->shouldHaveBeenCalledOnce();
-        $getRepo->shouldHaveBeenCalledOnce();
     }
 
-    public function provideCounts(): iterable
+    public static function provideCounts(): iterable
     {
-        return map(range(0, 50, 5), fn (int $value) => [$value]);
+        return [
+            ...array_map(fn (int $value) => [$value, null], range(0, 50, 5)),
+            ...array_map(fn (int $value) => [$value, ApiKey::create()], range(0, 18, 3)),
+        ];
     }
 
-    /**
-     * @test
-     * @dataProvider provideAdminApiKeys
-     */
+    #[Test, DataProviderExternal(ApiKeyDataProviders::class, 'adminApiKeysProvider')]
     public function infoReturnsVisitsForCertainShortCode(?ApiKey $apiKey): void
     {
         $shortCode = '123ABC';
-        $spec = $apiKey === null ? null : $apiKey->spec();
-        $repo = $this->prophesize(ShortUrlRepositoryInterface::class);
-        $count = $repo->shortCodeIsInUse($shortCode, null, $spec)->willReturn(true);
-        $this->em->getRepository(ShortUrl::class)->willReturn($repo->reveal())->shouldBeCalledOnce();
+        $identifier = ShortUrlIdentifier::fromShortCodeAndDomain($shortCode);
+        $spec = $apiKey?->spec();
 
-        $list = map(range(0, 1), fn () => Visit::forValidShortUrl(ShortUrl::createEmpty(), Visitor::emptyInstance()));
-        $repo2 = $this->prophesize(VisitRepository::class);
-        $repo2->findVisitsByShortCode($shortCode, null, Argument::type(DateRange::class), 1, 0, $spec)->willReturn(
-            $list,
+        $repo = $this->createMock(ShortUrlRepositoryInterface::class);
+        $repo->expects($this->once())->method('shortCodeIsInUse')->with($identifier, $spec)->willReturn(true);
+
+        $list = array_map(
+            static fn () => Visit::forValidShortUrl(ShortUrl::createFake(), Visitor::emptyInstance()),
+            range(0, 1),
         );
-        $repo2->countVisitsByShortCode($shortCode, null, Argument::type(DateRange::class), $spec)->willReturn(1);
-        $this->em->getRepository(Visit::class)->willReturn($repo2->reveal())->shouldBeCalledOnce();
+        $repo2 = $this->createMock(VisitRepository::class);
+        $repo2->method('findVisitsByShortCode')->with(
+            $identifier,
+            $this->isInstanceOf(VisitsListFiltering::class),
+        )->willReturn($list);
+        $repo2->method('countVisitsByShortCode')->with(
+            $identifier,
+            $this->isInstanceOf(VisitsCountFiltering::class),
+        )->willReturn(1);
 
-        $paginator = $this->helper->visitsForShortUrl(new ShortUrlIdentifier($shortCode), new VisitsParams(), $apiKey);
+        $this->em->expects($this->exactly(2))->method('getRepository')->willReturnMap([
+            [ShortUrl::class, $repo],
+            [Visit::class, $repo2],
+        ]);
+
+        $paginator = $this->helper->visitsForShortUrl($identifier, new VisitsParams(), $apiKey);
 
         self::assertEquals($list, ArrayUtils::iteratorToArray($paginator->getCurrentPageResults()));
-        $count->shouldHaveBeenCalledOnce();
     }
 
-    /** @test */
+    #[Test]
     public function throwsExceptionWhenRequestingVisitsForInvalidShortCode(): void
     {
         $shortCode = '123ABC';
-        $repo = $this->prophesize(ShortUrlRepositoryInterface::class);
-        $count = $repo->shortCodeIsInUse($shortCode, null, null)->willReturn(false);
-        $this->em->getRepository(ShortUrl::class)->willReturn($repo->reveal())->shouldBeCalledOnce();
+        $identifier = ShortUrlIdentifier::fromShortCodeAndDomain($shortCode);
+
+        $repo = $this->createMock(ShortUrlRepositoryInterface::class);
+        $repo->expects($this->once())->method('shortCodeIsInUse')->with($identifier, null)->willReturn(false);
+        $this->em->expects($this->once())->method('getRepository')->with(ShortUrl::class)->willReturn($repo);
 
         $this->expectException(ShortUrlNotFoundException::class);
-        $count->shouldBeCalledOnce();
 
-        $this->helper->visitsForShortUrl(new ShortUrlIdentifier($shortCode), new VisitsParams());
+        $this->helper->visitsForShortUrl($identifier, new VisitsParams());
     }
 
-    /** @test */
+    #[Test]
     public function throwsExceptionWhenRequestingVisitsForInvalidTag(): void
     {
         $tag = 'foo';
         $apiKey = ApiKey::create();
-        $repo = $this->prophesize(TagRepository::class);
-        $tagExists = $repo->tagExists($tag, $apiKey)->willReturn(false);
-        $getRepo = $this->em->getRepository(Tag::class)->willReturn($repo->reveal());
+        $repo = $this->createMock(TagRepository::class);
+        $repo->expects($this->once())->method('tagExists')->with($tag, $apiKey)->willReturn(false);
+        $this->em->expects($this->once())->method('getRepository')->with(Tag::class)->willReturn($repo);
 
         $this->expectException(TagNotFoundException::class);
-        $tagExists->shouldBeCalledOnce();
-        $getRepo->shouldBeCalledOnce();
 
         $this->helper->visitsForTag($tag, new VisitsParams(), $apiKey);
     }
 
-    /**
-     * @test
-     * @dataProvider provideAdminApiKeys
-     */
+    #[Test, DataProviderExternal(ApiKeyDataProviders::class, 'adminApiKeysProvider')]
     public function visitsForTagAreReturnedAsExpected(?ApiKey $apiKey): void
     {
         $tag = 'foo';
-        $repo = $this->prophesize(TagRepository::class);
-        $tagExists = $repo->tagExists($tag, $apiKey)->willReturn(true);
-        $getRepo = $this->em->getRepository(Tag::class)->willReturn($repo->reveal());
+        $repo = $this->createMock(TagRepository::class);
+        $repo->expects($this->once())->method('tagExists')->with($tag, $apiKey)->willReturn(true);
 
-        $spec = $apiKey === null ? null : $apiKey->spec();
-        $list = map(range(0, 1), fn () => Visit::forValidShortUrl(ShortUrl::createEmpty(), Visitor::emptyInstance()));
-        $repo2 = $this->prophesize(VisitRepository::class);
-        $repo2->findVisitsByTag($tag, Argument::type(DateRange::class), 1, 0, $spec)->willReturn($list);
-        $repo2->countVisitsByTag($tag, Argument::type(DateRange::class), $spec)->willReturn(1);
-        $this->em->getRepository(Visit::class)->willReturn($repo2->reveal())->shouldBeCalledOnce();
+        $list = array_map(
+            static fn () => Visit::forValidShortUrl(ShortUrl::createFake(), Visitor::emptyInstance()),
+            range(0, 1),
+        );
+        $repo2 = $this->createMock(VisitRepository::class);
+        $repo2->method('findVisitsByTag')->with($tag, $this->isInstanceOf(VisitsListFiltering::class))->willReturn(
+            $list,
+        );
+        $repo2->method('countVisitsByTag')->with($tag, $this->isInstanceOf(VisitsCountFiltering::class))->willReturn(1);
+
+        $this->em->expects($this->exactly(2))->method('getRepository')->willReturnMap([
+            [Tag::class, $repo],
+            [Visit::class, $repo2],
+        ]);
 
         $paginator = $this->helper->visitsForTag($tag, new VisitsParams(), $apiKey);
 
         self::assertEquals($list, ArrayUtils::iteratorToArray($paginator->getCurrentPageResults()));
-        $tagExists->shouldHaveBeenCalledOnce();
-        $getRepo->shouldHaveBeenCalledOnce();
     }
 
-    /** @test */
+    #[Test]
+    public function throwsExceptionWhenRequestingVisitsForInvalidDomain(): void
+    {
+        $domain = 'foo.com';
+        $apiKey = ApiKey::create();
+        $repo = $this->createMock(DomainRepository::class);
+        $repo->expects($this->once())->method('domainExists')->with($domain, $apiKey)->willReturn(false);
+        $this->em->expects($this->once())->method('getRepository')->with(Domain::class)->willReturn($repo);
+
+        $this->expectException(DomainNotFoundException::class);
+
+        $this->helper->visitsForDomain($domain, new VisitsParams(), $apiKey);
+    }
+
+    #[Test, DataProviderExternal(ApiKeyDataProviders::class, 'adminApiKeysProvider')]
+    public function visitsForNonDefaultDomainAreReturnedAsExpected(?ApiKey $apiKey): void
+    {
+        $domain = 'foo.com';
+        $repo = $this->createMock(DomainRepository::class);
+        $repo->expects($this->once())->method('domainExists')->with($domain, $apiKey)->willReturn(true);
+
+        $list = array_map(
+            static fn () => Visit::forValidShortUrl(ShortUrl::createFake(), Visitor::emptyInstance()),
+            range(0, 1),
+        );
+        $repo2 = $this->createMock(VisitRepository::class);
+        $repo2->method('findVisitsByDomain')->with(
+            $domain,
+            $this->isInstanceOf(VisitsListFiltering::class),
+        )->willReturn($list);
+        $repo2->method('countVisitsByDomain')->with(
+            $domain,
+            $this->isInstanceOf(VisitsCountFiltering::class),
+        )->willReturn(1);
+
+        $this->em->expects($this->exactly(2))->method('getRepository')->willReturnMap([
+            [Domain::class, $repo],
+            [Visit::class, $repo2],
+        ]);
+
+        $paginator = $this->helper->visitsForDomain($domain, new VisitsParams(), $apiKey);
+
+        self::assertEquals($list, ArrayUtils::iteratorToArray($paginator->getCurrentPageResults()));
+    }
+
+    #[Test, DataProviderExternal(ApiKeyDataProviders::class, 'adminApiKeysProvider')]
+    public function visitsForDefaultDomainAreReturnedAsExpected(?ApiKey $apiKey): void
+    {
+        $repo = $this->createMock(DomainRepository::class);
+        $repo->expects($this->never())->method('domainExists');
+
+        $list = array_map(
+            static fn () => Visit::forValidShortUrl(ShortUrl::createFake(), Visitor::emptyInstance()),
+            range(0, 1),
+        );
+        $repo2 = $this->createMock(VisitRepository::class);
+        $repo2->method('findVisitsByDomain')->with(
+            'DEFAULT',
+            $this->isInstanceOf(VisitsListFiltering::class),
+        )->willReturn($list);
+        $repo2->method('countVisitsByDomain')->with(
+            'DEFAULT',
+            $this->isInstanceOf(VisitsCountFiltering::class),
+        )->willReturn(1);
+
+        $this->em->expects($this->exactly(2))->method('getRepository')->willReturnMap([
+            [Domain::class, $repo],
+            [Visit::class, $repo2],
+        ]);
+
+        $paginator = $this->helper->visitsForDomain('DEFAULT', new VisitsParams(), $apiKey);
+
+        self::assertEquals($list, ArrayUtils::iteratorToArray($paginator->getCurrentPageResults()));
+    }
+
+    #[Test]
     public function orphanVisitsAreReturnedAsExpected(): void
     {
-        $list = map(range(0, 3), fn () => Visit::forBasePath(Visitor::emptyInstance()));
-        $repo = $this->prophesize(VisitRepository::class);
-        $countVisits = $repo->countOrphanVisits(Argument::type(DateRange::class))->willReturn(count($list));
-        $listVisits = $repo->findOrphanVisits(Argument::type(DateRange::class), Argument::cetera())->willReturn($list);
-        $getRepo = $this->em->getRepository(Visit::class)->willReturn($repo->reveal());
+        $list = array_map(static fn () => Visit::forBasePath(Visitor::emptyInstance()), range(0, 3));
+        $repo = $this->createMock(VisitRepository::class);
+        $repo->expects($this->once())->method('countOrphanVisits')->with(
+            $this->isInstanceOf(VisitsCountFiltering::class),
+        )->willReturn(count($list));
+        $repo->expects($this->once())->method('findOrphanVisits')->with(
+            $this->isInstanceOf(VisitsListFiltering::class),
+        )->willReturn($list);
+        $this->em->expects($this->once())->method('getRepository')->with(Visit::class)->willReturn($repo);
 
         $paginator = $this->helper->orphanVisits(new VisitsParams());
 
         self::assertEquals($list, ArrayUtils::iteratorToArray($paginator->getCurrentPageResults()));
-        $listVisits->shouldHaveBeenCalledOnce();
-        $countVisits->shouldHaveBeenCalledOnce();
-        $getRepo->shouldHaveBeenCalledOnce();
+    }
+
+    #[Test]
+    public function nonOrphanVisitsAreReturnedAsExpected(): void
+    {
+        $list = array_map(
+            static fn () => Visit::forValidShortUrl(ShortUrl::createFake(), Visitor::emptyInstance()),
+            range(0, 3),
+        );
+        $repo = $this->createMock(VisitRepository::class);
+        $repo->expects($this->once())->method('countNonOrphanVisits')->with(
+            $this->isInstanceOf(VisitsCountFiltering::class),
+        )->willReturn(count($list));
+        $repo->expects($this->once())->method('findNonOrphanVisits')->with(
+            $this->isInstanceOf(VisitsListFiltering::class),
+        )->willReturn($list);
+        $this->em->expects($this->once())->method('getRepository')->with(Visit::class)->willReturn($repo);
+
+        $paginator = $this->helper->nonOrphanVisits(new VisitsParams());
+
+        self::assertEquals($list, ArrayUtils::iteratorToArray($paginator->getCurrentPageResults()));
     }
 }

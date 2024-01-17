@@ -5,24 +5,21 @@ declare(strict_types=1);
 namespace Shlinkio\Shlink\Core\Domain;
 
 use Doctrine\ORM\EntityManagerInterface;
+use Shlinkio\Shlink\Core\Config\EmptyNotFoundRedirectConfig;
+use Shlinkio\Shlink\Core\Config\NotFoundRedirects;
+use Shlinkio\Shlink\Core\Domain\Entity\Domain;
 use Shlinkio\Shlink\Core\Domain\Model\DomainItem;
 use Shlinkio\Shlink\Core\Domain\Repository\DomainRepositoryInterface;
-use Shlinkio\Shlink\Core\Entity\Domain;
 use Shlinkio\Shlink\Core\Exception\DomainNotFoundException;
 use Shlinkio\Shlink\Rest\ApiKey\Role;
 use Shlinkio\Shlink\Rest\Entity\ApiKey;
 
-use function Functional\map;
+use function array_map;
 
 class DomainService implements DomainServiceInterface
 {
-    private EntityManagerInterface $em;
-    private string $defaultDomain;
-
-    public function __construct(EntityManagerInterface $em, string $defaultDomain)
+    public function __construct(private readonly EntityManagerInterface $em, private readonly string $defaultDomain)
     {
-        $this->em = $em;
-        $this->defaultDomain = $defaultDomain;
     }
 
     /**
@@ -30,19 +27,39 @@ class DomainService implements DomainServiceInterface
      */
     public function listDomains(?ApiKey $apiKey = null): array
     {
-        /** @var DomainRepositoryInterface $repo */
-        $repo = $this->em->getRepository(Domain::class);
-        $domains = $repo->findDomainsWithout($this->defaultDomain, $apiKey);
-        $mappedDomains = map($domains, fn (Domain $domain) => new DomainItem($domain->getAuthority(), false));
+        [$default, $domains] = $this->defaultDomainAndRest($apiKey);
+        $mappedDomains = array_map(fn (Domain $domain) => DomainItem::forNonDefaultDomain($domain), $domains);
 
-        if ($apiKey !== null && $apiKey->hasRole(Role::DOMAIN_SPECIFIC)) {
+        if ($apiKey?->hasRole(Role::DOMAIN_SPECIFIC)) {
             return $mappedDomains;
         }
 
         return [
-            new DomainItem($this->defaultDomain, true),
+            DomainItem::forDefaultDomain($this->defaultDomain, $default ?? new EmptyNotFoundRedirectConfig()),
             ...$mappedDomains,
         ];
+    }
+
+    /**
+     * @return array{Domain|null, Domain[]}
+     */
+    private function defaultDomainAndRest(?ApiKey $apiKey): array
+    {
+        /** @var DomainRepositoryInterface $repo */
+        $repo = $this->em->getRepository(Domain::class);
+        $allDomains = $repo->findDomains($apiKey);
+        $defaultDomain = null;
+        $restOfDomains = [];
+
+        foreach ($allDomains as $domain) {
+            if ($domain->authority === $this->defaultDomain) {
+                $defaultDomain = $domain;
+            } else {
+                $restOfDomains[] = $domain;
+            }
+        }
+
+        return [$defaultDomain, $restOfDomains];
     }
 
     /**
@@ -59,14 +76,51 @@ class DomainService implements DomainServiceInterface
         return $domain;
     }
 
-    public function getOrCreate(string $authority): Domain
+    public function findByAuthority(string $authority, ?ApiKey $apiKey = null): ?Domain
     {
-        $repo = $this->em->getRepository(Domain::class);
-        /** @var Domain|null $domain */
-        $domain = $repo->findOneBy(['authority' => $authority]) ?? new Domain($authority);
+        return $this->em->getRepository(Domain::class)->findOneByAuthority($authority, $apiKey);
+    }
 
-        $this->em->persist($domain);
+    /**
+     * @throws DomainNotFoundException
+     */
+    public function getOrCreate(string $authority, ?ApiKey $apiKey = null): Domain
+    {
+        $domain = $this->getPersistedDomain($authority, $apiKey);
         $this->em->flush();
+
+        return $domain;
+    }
+
+    /**
+     * @throws DomainNotFoundException
+     */
+    public function configureNotFoundRedirects(
+        string $authority,
+        NotFoundRedirects $notFoundRedirects,
+        ?ApiKey $apiKey = null,
+    ): Domain {
+        $domain = $this->getPersistedDomain($authority, $apiKey);
+        $domain->configureNotFoundRedirects($notFoundRedirects);
+
+        $this->em->flush();
+
+        return $domain;
+    }
+
+    /**
+     * @throws DomainNotFoundException
+     */
+    private function getPersistedDomain(string $authority, ?ApiKey $apiKey): Domain
+    {
+        $domain = $this->findByAuthority($authority, $apiKey);
+        if ($domain === null && $apiKey?->hasRole(Role::DOMAIN_SPECIFIC)) {
+            // This API key is restricted to one domain and a different one was tried to be fetched
+            throw DomainNotFoundException::fromAuthority($authority);
+        }
+
+        $domain = $domain ?? Domain::withAuthority($authority);
+        $this->em->persist($domain);
 
         return $domain;
     }

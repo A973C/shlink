@@ -5,89 +5,148 @@ declare(strict_types=1);
 namespace Shlinkio\Shlink\Core\Importer;
 
 use Doctrine\ORM\EntityManagerInterface;
-use Shlinkio\Shlink\Core\Entity\ShortUrl;
-use Shlinkio\Shlink\Core\Repository\ShortUrlRepositoryInterface;
-use Shlinkio\Shlink\Core\Service\ShortUrl\ShortCodeHelperInterface;
+use Shlinkio\Shlink\Core\Exception\NonUniqueSlugException;
+use Shlinkio\Shlink\Core\ShortUrl\Entity\ShortUrl;
+use Shlinkio\Shlink\Core\ShortUrl\Helper\ShortCodeUniquenessHelperInterface;
+use Shlinkio\Shlink\Core\ShortUrl\Repository\ShortUrlRepositoryInterface;
 use Shlinkio\Shlink\Core\ShortUrl\Resolver\ShortUrlRelationResolverInterface;
 use Shlinkio\Shlink\Core\Util\DoctrineBatchHelperInterface;
+use Shlinkio\Shlink\Core\Visit\Entity\Visit;
+use Shlinkio\Shlink\Core\Visit\Repository\VisitRepositoryInterface;
 use Shlinkio\Shlink\Importer\ImportedLinksProcessorInterface;
+use Shlinkio\Shlink\Importer\Model\ImportedShlinkOrphanVisit;
 use Shlinkio\Shlink\Importer\Model\ImportedShlinkUrl;
+use Shlinkio\Shlink\Importer\Model\ImportResult;
+use Shlinkio\Shlink\Importer\Params\ImportParams;
+use Symfony\Component\Console\Style\OutputStyle;
 use Symfony\Component\Console\Style\StyleInterface;
+use Throwable;
 
+use function Shlinkio\Shlink\Core\normalizeDate;
 use function sprintf;
 
 class ImportedLinksProcessor implements ImportedLinksProcessorInterface
 {
-    private EntityManagerInterface $em;
-    private ShortUrlRelationResolverInterface $relationResolver;
-    private ShortCodeHelperInterface $shortCodeHelper;
-    private DoctrineBatchHelperInterface $batchHelper;
-
     public function __construct(
-        EntityManagerInterface $em,
-        ShortUrlRelationResolverInterface $relationResolver,
-        ShortCodeHelperInterface $shortCodeHelper,
-        DoctrineBatchHelperInterface $batchHelper
+        private readonly EntityManagerInterface $em,
+        private readonly ShortUrlRelationResolverInterface $relationResolver,
+        private readonly ShortCodeUniquenessHelperInterface $shortCodeHelper,
+        private readonly DoctrineBatchHelperInterface $batchHelper,
     ) {
-        $this->em = $em;
-        $this->relationResolver = $relationResolver;
-        $this->shortCodeHelper = $shortCodeHelper;
-        $this->batchHelper = $batchHelper;
+    }
+
+    public function process(StyleInterface $io, ImportResult $result, ImportParams $params): void
+    {
+        $io->title('Importing short URLs');
+        $this->importShortUrls($io, $result->shlinkUrls, $params);
+
+        if ($params->importOrphanVisits) {
+            $io->title('Importing orphan visits');
+            $this->importOrphanVisits($io, $result->orphanVisits);
+        }
+
+        $io->success('Data properly imported!');
     }
 
     /**
-     * @param iterable|ImportedShlinkUrl[] $shlinkUrls
+     * @param iterable<ImportedShlinkUrl> $shlinkUrls
      */
-    public function process(StyleInterface $io, iterable $shlinkUrls, array $params): void
+    private function importShortUrls(StyleInterface $io, iterable $shlinkUrls, ImportParams $params): void
     {
-        /** @var ShortUrlRepositoryInterface $shortUrlRepo */
-        $shortUrlRepo = $this->em->getRepository(ShortUrl::class);
-        $importShortCodes = $params['import_short_codes'];
-        $iterable = $this->batchHelper->wrapIterable($shlinkUrls, 100);
+        $importShortCodes = $params->importShortCodes;
+        $iterable = $this->batchHelper->wrapIterable($shlinkUrls, $params->importVisits ? 10 : 100);
 
-        /** @var ImportedShlinkUrl $url */
-        foreach ($iterable as $url) {
-            $longUrl = $url->longUrl();
+        foreach ($iterable as $importedUrl) {
+            $skipOnShortCodeConflict = static fn (): bool => $io->choice(sprintf(
+                'Failed to import URL "%s" because its short-code "%s" is already in use. Do you want to generate '
+                . 'a new one or skip it?',
+                $importedUrl->longUrl,
+                $importedUrl->shortCode,
+            ), ['Generate new short-code', 'Skip'], 1) === 'Skip';
+            $longUrl = $importedUrl->longUrl;
 
-            // Skip already imported URLs
-            if ($shortUrlRepo->importedUrlExists($url)) {
-                $io->text(sprintf('%s: <comment>Skipped</comment>', $longUrl));
+            try {
+                $shortUrlImporting = $this->resolveShortUrl($importedUrl, $importShortCodes, $skipOnShortCodeConflict);
+            } catch (NonUniqueSlugException) {
+                $io->text(sprintf('%s: <fg=red>Error</>', $longUrl));
+                continue;
+            } catch (Throwable $e) {
+                $io->text(sprintf('%s: <comment>Skipped</comment>. Reason: %s.', $longUrl, $e->getMessage()));
+
+                if ($io instanceof OutputStyle && $io->isVerbose()) {
+                    $io->text($e->__toString());
+                }
+
                 continue;
             }
 
-            $shortUrl = ShortUrl::fromImport($url, $importShortCodes, $this->relationResolver);
-            if (! $this->handleShortCodeUniqueness($url, $shortUrl, $io, $importShortCodes)) {
-                continue;
-            }
-
-            $this->em->persist($shortUrl);
-            $io->text(sprintf('%s: <info>Imported</info>', $longUrl));
+            $resultMessage = $shortUrlImporting->importVisits(
+                $this->batchHelper->wrapIterable($importedUrl->visits, 100),
+                $this->em,
+            );
+            $io->text(sprintf('%s: %s', $longUrl, $resultMessage));
         }
     }
 
+    private function resolveShortUrl(
+        ImportedShlinkUrl $importedUrl,
+        bool $importShortCodes,
+        callable $skipOnShortCodeConflict,
+    ): ShortUrlImporting {
+        /** @var ShortUrlRepositoryInterface $shortUrlRepo */
+        $shortUrlRepo = $this->em->getRepository(ShortUrl::class);
+        $alreadyImportedShortUrl = $shortUrlRepo->findOneByImportedUrl($importedUrl);
+        if ($alreadyImportedShortUrl !== null) {
+            return ShortUrlImporting::fromExistingShortUrl($alreadyImportedShortUrl);
+        }
+
+        $shortUrl = ShortUrl::fromImport($importedUrl, $importShortCodes, $this->relationResolver);
+        if (! $this->handleShortCodeUniqueness($shortUrl, $importShortCodes, $skipOnShortCodeConflict)) {
+            throw NonUniqueSlugException::fromImport($importedUrl);
+        }
+
+        $this->em->persist($shortUrl);
+        return ShortUrlImporting::fromNewShortUrl($shortUrl);
+    }
+
     private function handleShortCodeUniqueness(
-        ImportedShlinkUrl $url,
         ShortUrl $shortUrl,
-        StyleInterface $io,
-        bool $importShortCodes
+        bool $importShortCodes,
+        callable $skipOnShortCodeConflict,
     ): bool {
         if ($this->shortCodeHelper->ensureShortCodeUniqueness($shortUrl, $importShortCodes)) {
             return true;
         }
 
-        $longUrl = $url->longUrl();
-        $action = $io->choice(sprintf(
-            'Failed to import URL "%s" because its short-code "%s" is already in use. Do you want to generate a new '
-            . 'one or skip it?',
-            $longUrl,
-            $url->shortCode(),
-        ), ['Generate new short-code', 'Skip'], 1);
-
-        if ($action === 'Skip') {
-            $io->text(sprintf('%s: <comment>Skipped</comment>', $longUrl));
+        if ($skipOnShortCodeConflict()) {
             return false;
         }
 
         return $this->shortCodeHelper->ensureShortCodeUniqueness($shortUrl, false);
+    }
+
+    /**
+     * @param iterable<ImportedShlinkOrphanVisit> $orphanVisits
+     */
+    private function importOrphanVisits(StyleInterface $io, iterable $orphanVisits): void
+    {
+        $iterable = $this->batchHelper->wrapIterable($orphanVisits, 100);
+
+        /** @var VisitRepositoryInterface $visitRepo */
+        $visitRepo = $this->em->getRepository(Visit::class);
+        $mostRecentOrphanVisit = $visitRepo->findMostRecentOrphanVisit();
+
+        $importedVisits = 0;
+        foreach ($iterable as $importedOrphanVisit) {
+            // Skip visits which are older than the most recent already imported visit's date
+            if ($mostRecentOrphanVisit?->getDate()->greaterThanOrEquals(normalizeDate($importedOrphanVisit->date))) {
+                continue;
+            }
+
+            $this->em->persist(Visit::fromOrphanImport($importedOrphanVisit));
+            $importedVisits++;
+        }
+
+        $io->text(sprintf('<info>Imported %s</info> orphan visits.', $importedVisits));
     }
 }

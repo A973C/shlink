@@ -5,56 +5,45 @@ declare(strict_types=1);
 namespace Shlinkio\Shlink\Rest\ApiKey\Model;
 
 use Cake\Chronos\Chronos;
+use Ramsey\Uuid\Uuid;
 
 final class ApiKeyMeta
 {
-    private ?string $name = null;
-    private ?Chronos $expirationDate = null;
-    /** @var RoleDefinition[] */
-    private array $roleDefinitions;
-
-    private function __construct(?string $name, ?Chronos $expirationDate, array $roleDefinitions)
-    {
-        $this->name = $name;
-        $this->expirationDate = $expirationDate;
-        $this->roleDefinitions = $roleDefinitions;
+    /**
+     * @param iterable<RoleDefinition> $roleDefinitions
+     */
+    private function __construct(
+        public readonly string $key,
+        public readonly ?string $name,
+        public readonly ?Chronos $expirationDate,
+        public readonly iterable $roleDefinitions,
+    ) {
     }
 
-    public static function withName(string $name): self
+    public static function empty(): self
     {
-        return new self($name, null, []);
+        return self::fromParams();
     }
 
-    public static function withExpirationDate(Chronos $expirationDate): self
-    {
-        return new self(null, $expirationDate, []);
-    }
-
-    public static function withNameAndExpirationDate(string $name, Chronos $expirationDate): self
-    {
-        return new self($name, $expirationDate, []);
+    /**
+     * @param iterable<RoleDefinition> $roleDefinitions
+     */
+    public static function fromParams(
+        ?string $key = null,
+        ?string $name = null,
+        ?Chronos $expirationDate = null,
+        iterable $roleDefinitions = [],
+    ): self {
+        return new self(
+            key: $key ?? Uuid::uuid4()->toString(),
+            name: $name,
+            expirationDate: $expirationDate,
+            roleDefinitions: $roleDefinitions,
+        );
     }
 
     public static function withRoles(RoleDefinition ...$roleDefinitions): self
     {
-        return new self(null, null, $roleDefinitions);
-    }
-
-    public function name(): ?string
-    {
-        return $this->name;
-    }
-
-    public function expirationDate(): ?Chronos
-    {
-        return $this->expirationDate;
-    }
-
-    /**
-     * @return RoleDefinition[]
-     */
-    public function roleDefinitions(): array
-    {
-        return $this->roleDefinitions;
+        return self::fromParams(roleDefinitions: $roleDefinitions);
     }
 }

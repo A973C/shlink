@@ -7,52 +7,47 @@ namespace ShlinkioTest\Shlink\Rest\Middleware\ShortUrl;
 use Laminas\Diactoros\Response;
 use Laminas\Diactoros\ServerRequestFactory;
 use PHPUnit\Framework\Assert;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use Shlinkio\Shlink\Rest\Middleware\ShortUrl\DropDefaultDomainFromRequestMiddleware;
 
 class DropDefaultDomainFromRequestMiddlewareTest extends TestCase
 {
-    use ProphecyTrait;
-
     private DropDefaultDomainFromRequestMiddleware $middleware;
-    private ObjectProphecy $next;
+    private MockObject & RequestHandlerInterface $next;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->next = $this->prophesize(RequestHandlerInterface::class);
-        $this->middleware = new DropDefaultDomainFromRequestMiddleware('doma.in');
+        $this->next = $this->createMock(RequestHandlerInterface::class);
+        $this->middleware = new DropDefaultDomainFromRequestMiddleware('s.test');
     }
 
-    /**
-     * @test
-     * @dataProvider provideQueryParams
-     */
+    #[Test, DataProvider('provideQueryParams')]
     public function domainIsDroppedWhenDefaultOneIsProvided(array $providedPayload, array $expectedPayload): void
     {
         $req = ServerRequestFactory::fromGlobals()->withQueryParams($providedPayload)->withParsedBody($providedPayload);
 
-        $handle = $this->next->handle(Argument::that(function (ServerRequestInterface $request) use ($expectedPayload) {
-            Assert::assertEquals($expectedPayload, $request->getQueryParams());
-            Assert::assertEquals($expectedPayload, $request->getParsedBody());
-            return $request;
-        }))->willReturn(new Response());
+        $this->next->expects($this->once())->method('handle')->with($this->callback(
+            function (ServerRequestInterface $request) use ($expectedPayload) {
+                Assert::assertEquals($expectedPayload, $request->getQueryParams());
+                Assert::assertEquals($expectedPayload, $request->getParsedBody());
+                return true;
+            },
+        ))->willReturn(new Response());
 
-        $this->middleware->process($req, $this->next->reveal());
-
-        $handle->shouldHaveBeenCalledOnce();
+        $this->middleware->process($req, $this->next);
     }
 
-    public function provideQueryParams(): iterable
+    public static function provideQueryParams(): iterable
     {
         yield [[], []];
         yield [['foo' => 'bar'], ['foo' => 'bar']];
-        yield [['foo' => 'bar', 'domain' => 'doma.in'], ['foo' => 'bar']];
+        yield [['foo' => 'bar', 'domain' => 's.test'], ['foo' => 'bar']];
         yield [['foo' => 'bar', 'domain' => 'not_default'], ['foo' => 'bar', 'domain' => 'not_default']];
-        yield [['domain' => 'doma.in'], []];
+        yield [['domain' => 's.test'], []];
     }
 }

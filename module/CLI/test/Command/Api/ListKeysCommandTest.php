@@ -4,58 +4,63 @@ declare(strict_types=1);
 
 namespace ShlinkioTest\Shlink\CLI\Command\Api;
 
+use Cake\Chronos\Chronos;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Prophecy\ObjectProphecy;
 use Shlinkio\Shlink\CLI\Command\Api\ListKeysCommand;
-use Shlinkio\Shlink\Core\Entity\Domain;
+use Shlinkio\Shlink\Core\Domain\Entity\Domain;
 use Shlinkio\Shlink\Rest\ApiKey\Model\ApiKeyMeta;
 use Shlinkio\Shlink\Rest\ApiKey\Model\RoleDefinition;
 use Shlinkio\Shlink\Rest\Entity\ApiKey;
 use Shlinkio\Shlink\Rest\Service\ApiKeyServiceInterface;
-use ShlinkioTest\Shlink\CLI\CliTestUtilsTrait;
+use ShlinkioTest\Shlink\CLI\Util\CliTestUtils;
 use Symfony\Component\Console\Tester\CommandTester;
 
 class ListKeysCommandTest extends TestCase
 {
-    use CliTestUtilsTrait;
-
     private CommandTester $commandTester;
-    private ObjectProphecy $apiKeyService;
+    private MockObject & ApiKeyServiceInterface $apiKeyService;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->apiKeyService = $this->prophesize(ApiKeyServiceInterface::class);
-        $this->commandTester = $this->testerForCommand(new ListKeysCommand($this->apiKeyService->reveal()));
+        $this->apiKeyService = $this->createMock(ApiKeyServiceInterface::class);
+        $this->commandTester = CliTestUtils::testerForCommand(new ListKeysCommand($this->apiKeyService));
     }
 
-    /**
-     * @test
-     * @dataProvider provideKeysAndOutputs
-     */
+    #[Test, DataProvider('provideKeysAndOutputs')]
     public function returnsExpectedOutput(array $keys, bool $enabledOnly, string $expected): void
     {
-        $listKeys = $this->apiKeyService->listKeys($enabledOnly)->willReturn($keys);
+        $this->apiKeyService->expects($this->once())->method('listKeys')->with($enabledOnly)->willReturn($keys);
 
         $this->commandTester->execute(['--enabled-only' => $enabledOnly]);
         $output = $this->commandTester->getDisplay();
 
         self::assertEquals($expected, $output);
-        $listKeys->shouldHaveBeenCalledOnce();
     }
 
-    public function provideKeysAndOutputs(): iterable
+    public static function provideKeysAndOutputs(): iterable
     {
+        $dateInThePast = Chronos::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:00');
+
         yield 'all keys' => [
-            [$apiKey1 = ApiKey::create(), $apiKey2 = ApiKey::create(), $apiKey3 = ApiKey::create()],
+            [
+                $apiKey1 = ApiKey::create()->disable(),
+                $apiKey2 = ApiKey::fromMeta(ApiKeyMeta::fromParams(expirationDate: $dateInThePast)),
+                $apiKey3 = ApiKey::create(),
+            ],
             false,
             <<<OUTPUT
-            +--------------------------------------+------+------------+-----------------+-------+
-            | Key                                  | Name | Is enabled | Expiration date | Roles |
-            +--------------------------------------+------+------------+-----------------+-------+
-            | {$apiKey1} | -    | +++        | -               | Admin |
-            | {$apiKey2} | -    | +++        | -               | Admin |
-            | {$apiKey3} | -    | +++        | -               | Admin |
-            +--------------------------------------+------+------------+-----------------+-------+
+            +--------------------------------------+------+------------+---------------------------+-------+
+            | Key                                  | Name | Is enabled | Expiration date           | Roles |
+            +--------------------------------------+------+------------+---------------------------+-------+
+            | {$apiKey1} | -    | ---        | -                         | Admin |
+            +--------------------------------------+------+------------+---------------------------+-------+
+            | {$apiKey2} | -    | ---        | 2020-01-01T00:00:00+00:00 | Admin |
+            +--------------------------------------+------+------------+---------------------------+-------+
+            | {$apiKey3} | -    | +++        | -                         | Admin |
+            +--------------------------------------+------+------------+---------------------------+-------+
 
             OUTPUT,
         ];
@@ -67,6 +72,7 @@ class ListKeysCommandTest extends TestCase
             | Key                                  | Name | Expiration date | Roles |
             +--------------------------------------+------+-----------------+-------+
             | {$apiKey1} | -    | -               | Admin |
+            +--------------------------------------+------+-----------------+-------+
             | {$apiKey2} | -    | -               | Admin |
             +--------------------------------------+------+-----------------+-------+
 
@@ -75,12 +81,14 @@ class ListKeysCommandTest extends TestCase
         yield 'with roles' => [
             [
                 $apiKey1 = ApiKey::create(),
-                $apiKey2 = $this->apiKeyWithRoles([RoleDefinition::forAuthoredShortUrls()]),
-                $apiKey3 = $this->apiKeyWithRoles([RoleDefinition::forDomain((new Domain('example.com'))->setId('1'))]),
+                $apiKey2 = self::apiKeyWithRoles([RoleDefinition::forAuthoredShortUrls()]),
+                $apiKey3 = self::apiKeyWithRoles(
+                    [RoleDefinition::forDomain(self::domainWithId(Domain::withAuthority('example.com')))],
+                ),
                 $apiKey4 = ApiKey::create(),
-                $apiKey5 = $this->apiKeyWithRoles([
+                $apiKey5 = self::apiKeyWithRoles([
                     RoleDefinition::forAuthoredShortUrls(),
-                    RoleDefinition::forDomain((new Domain('example.com'))->setId('1')),
+                    RoleDefinition::forDomain(self::domainWithId(Domain::withAuthority('example.com'))),
                 ]),
                 $apiKey6 = ApiKey::create(),
             ],
@@ -90,11 +98,16 @@ class ListKeysCommandTest extends TestCase
             | Key                                  | Name | Expiration date | Roles                    |
             +--------------------------------------+------+-----------------+--------------------------+
             | {$apiKey1} | -    | -               | Admin                    |
+            +--------------------------------------+------+-----------------+--------------------------+
             | {$apiKey2} | -    | -               | Author only              |
+            +--------------------------------------+------+-----------------+--------------------------+
             | {$apiKey3} | -    | -               | Domain only: example.com |
+            +--------------------------------------+------+-----------------+--------------------------+
             | {$apiKey4} | -    | -               | Admin                    |
+            +--------------------------------------+------+-----------------+--------------------------+
             | {$apiKey5} | -    | -               | Author only              |
             |                                      |      |                 | Domain only: example.com |
+            +--------------------------------------+------+-----------------+--------------------------+
             | {$apiKey6} | -    | -               | Admin                    |
             +--------------------------------------+------+-----------------+--------------------------+
 
@@ -102,9 +115,9 @@ class ListKeysCommandTest extends TestCase
         ];
         yield 'with names' => [
             [
-                $apiKey1 = ApiKey::fromMeta(ApiKeyMeta::withName('Alice')),
-                $apiKey2 = ApiKey::fromMeta(ApiKeyMeta::withName('Alice and Bob')),
-                $apiKey3 = ApiKey::fromMeta(ApiKeyMeta::withName('')),
+                $apiKey1 = ApiKey::fromMeta(ApiKeyMeta::fromParams(name: 'Alice')),
+                $apiKey2 = ApiKey::fromMeta(ApiKeyMeta::fromParams(name: 'Alice and Bob')),
+                $apiKey3 = ApiKey::fromMeta(ApiKeyMeta::fromParams(name: '')),
                 $apiKey4 = ApiKey::create(),
             ],
             true,
@@ -113,8 +126,11 @@ class ListKeysCommandTest extends TestCase
             | Key                                  | Name          | Expiration date | Roles |
             +--------------------------------------+---------------+-----------------+-------+
             | {$apiKey1} | Alice         | -               | Admin |
+            +--------------------------------------+---------------+-----------------+-------+
             | {$apiKey2} | Alice and Bob | -               | Admin |
+            +--------------------------------------+---------------+-----------------+-------+
             | {$apiKey3} |               | -               | Admin |
+            +--------------------------------------+---------------+-----------------+-------+
             | {$apiKey4} | -             | -               | Admin |
             +--------------------------------------+---------------+-----------------+-------+
 
@@ -122,7 +138,7 @@ class ListKeysCommandTest extends TestCase
         ];
     }
 
-    private function apiKeyWithRoles(array $roles): ApiKey
+    private static function apiKeyWithRoles(array $roles): ApiKey
     {
         $apiKey = ApiKey::create();
         foreach ($roles as $role) {
@@ -130,5 +146,11 @@ class ListKeysCommandTest extends TestCase
         }
 
         return $apiKey;
+    }
+
+    private static function domainWithId(Domain $domain): Domain
+    {
+        $domain->setId('1');
+        return $domain;
     }
 }

@@ -9,6 +9,7 @@ use Mezzio\ProblemDetails\Exception\CommonProblemDetailsExceptionTrait;
 use Mezzio\ProblemDetails\Exception\ProblemDetailsExceptionInterface;
 
 use function implode;
+use function Shlinkio\Shlink\Core\toProblemDetailsType;
 use function sprintf;
 
 class MissingAuthenticationException extends RuntimeException implements ProblemDetailsExceptionInterface
@@ -16,7 +17,7 @@ class MissingAuthenticationException extends RuntimeException implements Problem
     use CommonProblemDetailsExceptionTrait;
 
     private const TITLE = 'Invalid authorization';
-    private const TYPE = 'INVALID_AUTHORIZATION';
+    public const ERROR_CODE = 'missing-authentication';
 
     public static function forHeaders(array $expectedHeaders): self
     {
@@ -24,10 +25,7 @@ class MissingAuthenticationException extends RuntimeException implements Problem
             'Expected one of the following authentication headers, ["%s"], but none were provided',
             implode('", "', $expectedHeaders),
         ));
-        $e->additional = [
-            'expectedTypes' => $expectedHeaders, // Deprecated
-            'expectedHeaders' => $expectedHeaders,
-        ];
+        $e->additional = ['expectedHeaders' => $expectedHeaders];
 
         return $e;
     }
@@ -46,7 +44,7 @@ class MissingAuthenticationException extends RuntimeException implements Problem
 
         $e->detail = $message;
         $e->title = self::TITLE;
-        $e->type = self::TYPE;
+        $e->type = toProblemDetailsType(self::ERROR_CODE);
         $e->status = StatusCodeInterface::STATUS_UNAUTHORIZED;
 
         return $e;

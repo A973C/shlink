@@ -4,18 +4,13 @@ declare(strict_types=1);
 
 namespace Shlinkio\Shlink\Rest\ApiKey\Model;
 
-use Shlinkio\Shlink\Core\Entity\Domain;
+use Shlinkio\Shlink\Core\Domain\Entity\Domain;
 use Shlinkio\Shlink\Rest\ApiKey\Role;
 
 final class RoleDefinition
 {
-    private string $roleName;
-    private array $meta;
-
-    private function __construct(string $roleName, array $meta)
+    private function __construct(public readonly Role $role, public readonly array $meta)
     {
-        $this->roleName = $roleName;
-        $this->meta = $meta;
     }
 
     public static function forAuthoredShortUrls(): self
@@ -27,17 +22,12 @@ final class RoleDefinition
     {
         return new self(
             Role::DOMAIN_SPECIFIC,
-            ['domain_id' => $domain->getId(), 'authority' => $domain->getAuthority()],
+            ['domain_id' => $domain->getId(), 'authority' => $domain->authority],
         );
     }
 
-    public function roleName(): string
+    public static function forNoOrphanVisits(): self
     {
-        return $this->roleName;
-    }
-
-    public function meta(): array
-    {
-        return $this->meta;
+        return new self(Role::NO_ORPHAN_VISITS, []);
     }
 }

@@ -7,64 +7,39 @@ namespace ShlinkioTest\Shlink\Rest\Action;
 use Cake\Chronos\Chronos;
 use Laminas\Diactoros\Response\JsonResponse;
 use Laminas\Diactoros\ServerRequestFactory;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
-use RuntimeException;
 use Shlinkio\Shlink\Common\Mercure\JwtProviderInterface;
 use Shlinkio\Shlink\Rest\Action\MercureInfoAction;
 use Shlinkio\Shlink\Rest\Exception\MercureException;
 
 class MercureInfoActionTest extends TestCase
 {
-    use ProphecyTrait;
+    private MockObject & JwtProviderInterface $provider;
 
-    private ObjectProphecy $provider;
-
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->provider = $this->prophesize(JwtProviderInterface::class);
+        $this->provider = $this->createMock(JwtProviderInterface::class);
     }
 
-    /**
-     * @test
-     * @dataProvider provideNoHostConfigs
-     */
+    #[Test, DataProvider('provideNoHostConfigs')]
     public function throwsExceptionWhenConfigDoesNotHavePublicHost(array $mercureConfig): void
     {
-        $buildToken = $this->provider->buildSubscriptionToken(Argument::any())->willReturn('abc.123');
+        $this->provider->expects($this->never())->method('buildSubscriptionToken');
 
-        $action = new MercureInfoAction($this->provider->reveal(), $mercureConfig);
+        $action = new MercureInfoAction($this->provider, $mercureConfig);
 
         $this->expectException(MercureException::class);
-        $buildToken->shouldNotBeCalled();
 
         $action->handle(ServerRequestFactory::fromGlobals());
     }
 
-    public function provideNoHostConfigs(): iterable
+    public static function provideNoHostConfigs(): iterable
     {
         yield 'host not defined' => [[]];
         yield 'host is null' => [['public_hub_url' => null]];
-    }
-
-    /**
-     * @test
-     * @dataProvider provideValidConfigs
-     */
-    public function throwsExceptionWhenBuildingTokenFails(array $mercureConfig): void
-    {
-        $buildToken = $this->provider->buildSubscriptionToken(Argument::any())->willThrow(
-            new RuntimeException('Error'),
-        );
-
-        $action = new MercureInfoAction($this->provider->reveal(), $mercureConfig);
-
-        $this->expectException(MercureException::class);
-        $buildToken->shouldBeCalledOnce();
-
-        $action->handle(ServerRequestFactory::fromGlobals());
     }
 
     public function provideValidConfigs(): iterable
@@ -73,15 +48,12 @@ class MercureInfoActionTest extends TestCase
         yield 'days defined' => [['public_hub_url' => 'http://foobar.com', 'jwt_days_duration' => 20]];
     }
 
-    /**
-     * @test
-     * @dataProvider provideDays
-     */
+    #[Test, DataProvider('provideDays')]
     public function returnsExpectedInfoWhenEverythingIsOk(?int $days): void
     {
-        $buildToken = $this->provider->buildSubscriptionToken(Argument::any())->willReturn('abc.123');
+        $this->provider->expects($this->once())->method('buildSubscriptionToken')->willReturn('abc.123');
 
-        $action = new MercureInfoAction($this->provider->reveal(), [
+        $action = new MercureInfoAction($this->provider, [
             'public_hub_url' => 'http://foobar.com',
             'jwt_days_duration' => $days,
         ]);
@@ -98,10 +70,9 @@ class MercureInfoActionTest extends TestCase
             Chronos::now()->addDays($days ?? 1)->startOfDay(),
             Chronos::parse($payload['jwtExpiration'])->startOfDay(),
         );
-        $buildToken->shouldHaveBeenCalledOnce();
     }
 
-    public function provideDays(): iterable
+    public static function provideDays(): iterable
     {
         yield 'days not defined' => [null];
         yield 'days defined' => [10];

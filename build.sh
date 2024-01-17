@@ -10,7 +10,8 @@ fi
 version=$1
 noSwoole=$2
 phpVersion=$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')
-[[ $noSwoole ]] && swooleSuffix="" || swooleSuffix="_swoole"
+# Openswoole is deprecated. Remove in v4.0.0
+[[ $noSwoole ]] && swooleSuffix="" || swooleSuffix="_openswoole"
 distId="shlink${version}_php${phpVersion}${swooleSuffix}_dist"
 builtContent="./build/${distId}"
 projectdir=$(pwd)
@@ -24,28 +25,31 @@ rsync -av * "${builtContent}" \
     --exclude=*docker* \
     --exclude=Dockerfile \
     --include=.htaccess \
+    --include=config/roadrunner/.rr.yml \
     --exclude-from=./.dockerignore
 cd "${builtContent}"
 
 # Install dependencies
 echo "Installing dependencies with $composerBin..."
-composerFlags="--optimize-autoloader --no-progress --no-interaction"
+# Deprecated. Do not ignore PHP platform req for Shlink v4.0.0
+composerFlags="--optimize-autoloader --no-progress --no-interaction --ignore-platform-req=php+"
 ${composerBin} self-update
 ${composerBin} install --no-dev --prefer-dist $composerFlags
 
 if [[ $noSwoole ]]; then
-  # If generating a dist not for swoole, uninstall mezzio-swoole
+  # If generating a dist not for openswoole, uninstall mezzio-swoole
   ${composerBin} remove mezzio/mezzio-swoole --with-all-dependencies --update-no-dev $composerFlags
 else
-  # Copy mezzio helper script to vendor (deprecated - Remove with Shlink 3.0.0)
-  cp "${projectdir}/bin/helper/mezzio-swoole" "./vendor/bin"
+  # Deprecated. Remove in Shlink v4.0.0
+  # If generating a dist for openswoole, uninstall RoadRunner
+  ${composerBin} remove spiral/roadrunner spiral/roadrunner-jobs spiral/roadrunner-cli spiral/roadrunner-http --with-all-dependencies --update-no-dev $composerFlags
 fi
 
 # Delete development files
 echo 'Deleting dev files...'
 rm composer.*
 
-# Update shlink version in config
+# Update Shlink version in config
 sed -i "s/%SHLINK_VERSION%/${version}/g" config/autoload/app_options.global.php
 
 # Compressing file

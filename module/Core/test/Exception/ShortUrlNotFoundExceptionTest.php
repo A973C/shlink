@@ -4,37 +4,36 @@ declare(strict_types=1);
 
 namespace ShlinkioTest\Shlink\Core\Exception;
 
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Shlinkio\Shlink\Core\Exception\ShortUrlNotFoundException;
-use Shlinkio\Shlink\Core\Model\ShortUrlIdentifier;
+use Shlinkio\Shlink\Core\ShortUrl\Model\ShortUrlIdentifier;
 
 class ShortUrlNotFoundExceptionTest extends TestCase
 {
-    /**
-     * @test
-     * @dataProvider provideMessages
-     */
+    #[Test, DataProvider('provideMessages')]
     public function properlyCreatesExceptionFromNotFoundShortCode(
         string $expectedMessage,
         string $shortCode,
-        ?string $domain
+        ?string $domain,
     ): void {
         $expectedAdditional = ['shortCode' => $shortCode];
         if ($domain !== null) {
             $expectedAdditional['domain'] = $domain;
         }
 
-        $e = ShortUrlNotFoundException::fromNotFound(new ShortUrlIdentifier($shortCode, $domain));
+        $e = ShortUrlNotFoundException::fromNotFound(ShortUrlIdentifier::fromShortCodeAndDomain($shortCode, $domain));
 
         self::assertEquals($expectedMessage, $e->getMessage());
         self::assertEquals($expectedMessage, $e->getDetail());
         self::assertEquals('Short URL not found', $e->getTitle());
-        self::assertEquals('INVALID_SHORTCODE', $e->getType());
+        self::assertEquals('https://shlink.io/api/error/short-url-not-found', $e->getType());
         self::assertEquals(404, $e->getStatus());
         self::assertEquals($expectedAdditional, $e->getAdditionalData());
     }
 
-    public function provideMessages(): iterable
+    public static function provideMessages(): iterable
     {
         yield 'without domain' => [
             'No URL found with short code "abc123"',

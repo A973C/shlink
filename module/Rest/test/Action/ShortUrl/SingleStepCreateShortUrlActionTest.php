@@ -5,38 +5,37 @@ declare(strict_types=1);
 namespace ShlinkioTest\Shlink\Rest\Action\ShortUrl;
 
 use Laminas\Diactoros\ServerRequest;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
 use Shlinkio\Shlink\Common\Rest\DataTransformerInterface;
-use Shlinkio\Shlink\Core\Entity\ShortUrl;
-use Shlinkio\Shlink\Core\Model\ShortUrlMeta;
-use Shlinkio\Shlink\Core\Service\UrlShortenerInterface;
+use Shlinkio\Shlink\Core\Options\UrlShortenerOptions;
+use Shlinkio\Shlink\Core\ShortUrl\Entity\ShortUrl;
+use Shlinkio\Shlink\Core\ShortUrl\Model\ShortUrlCreation;
+use Shlinkio\Shlink\Core\ShortUrl\Model\UrlShorteningResult;
+use Shlinkio\Shlink\Core\ShortUrl\UrlShortenerInterface;
 use Shlinkio\Shlink\Rest\Action\ShortUrl\SingleStepCreateShortUrlAction;
 use Shlinkio\Shlink\Rest\Entity\ApiKey;
 
 class SingleStepCreateShortUrlActionTest extends TestCase
 {
-    use ProphecyTrait;
-
     private SingleStepCreateShortUrlAction $action;
-    private ObjectProphecy $urlShortener;
-    private ObjectProphecy $transformer;
+    private MockObject & UrlShortenerInterface $urlShortener;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->urlShortener = $this->prophesize(UrlShortenerInterface::class);
-        $this->transformer = $this->prophesize(DataTransformerInterface::class);
-        $this->transformer->transform(Argument::type(ShortUrl::class))->willReturn([]);
+        $this->urlShortener = $this->createMock(UrlShortenerInterface::class);
+        $transformer = $this->createMock(DataTransformerInterface::class);
+        $transformer->method('transform')->willReturn([]);
 
         $this->action = new SingleStepCreateShortUrlAction(
-            $this->urlShortener->reveal(),
-            $this->transformer->reveal(),
+            $this->urlShortener,
+            $transformer,
+            new UrlShortenerOptions(),
         );
     }
 
-    /** @test */
+    #[Test]
     public function properDataIsPassedWhenGeneratingShortCode(): void
     {
         $apiKey = ApiKey::create();
@@ -44,13 +43,12 @@ class SingleStepCreateShortUrlActionTest extends TestCase
         $request = (new ServerRequest())->withQueryParams([
             'longUrl' => 'http://foobar.com',
         ])->withAttribute(ApiKey::class, $apiKey);
-        $generateShortCode = $this->urlShortener->shorten(
-            ShortUrlMeta::fromRawData(['apiKey' => $apiKey, 'longUrl' => 'http://foobar.com']),
-        )->willReturn(ShortUrl::createEmpty());
+        $this->urlShortener->expects($this->once())->method('shorten')->with(
+            ShortUrlCreation::fromRawData(['apiKey' => $apiKey, 'longUrl' => 'http://foobar.com']),
+        )->willReturn(UrlShorteningResult::withoutErrorOnEventDispatching(ShortUrl::createFake()));
 
         $resp = $this->action->handle($request);
 
         self::assertEquals(200, $resp->getStatusCode());
-        $generateShortCode->shouldHaveBeenCalled();
     }
 }

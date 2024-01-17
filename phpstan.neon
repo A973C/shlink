@@ -1,6 +1,16 @@
+includes:
+    - vendor/phpstan/phpstan-doctrine/extension.neon
+    - vendor/phpstan/phpstan-symfony/extension.neon
+    - vendor/phpstan/phpstan-phpunit/extension.neon
+    - vendor/phpstan/phpstan-phpunit/rules.neon
 parameters:
-	checkMissingIterableValueType: false
-	checkGenericClassInNonGenericObjectType: false
-	ignoreErrors:
-		- '#If condition is always false#'
-		- '#setOrderBy\(\) expects array\<int, string\>, array\<string, string\> given#'
+    checkMissingIterableValueType: false
+    checkGenericClassInNonGenericObjectType: false
+    symfony:
+        console_application_loader: 'config/cli-app.php'
+    doctrine:
+        repositoryClass: Happyr\DoctrineSpecification\Repository\EntitySpecificationRepository
+        objectManagerLoader: 'config/entity-manager.php'
+    ignoreErrors:
+        - '#should return int<0, max> but returns int#'
+        - '#expects -1|int<1, max>, int given#'

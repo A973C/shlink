@@ -5,14 +5,20 @@ declare(strict_types=1);
 namespace ShlinkioTest\Shlink\CLI\Command\Db;
 
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\Driver;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Schema\AbstractSchemaManager;
+use Doctrine\ORM\EntityManagerInterface;
+use Doctrine\ORM\Mapping\ClassMetadata;
+use Doctrine\Persistence\Mapping\ClassMetadataFactory;
+use Exception;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\Prophecy\ObjectProphecy;
 use Shlinkio\Shlink\CLI\Command\Db\CreateDatabaseCommand;
 use Shlinkio\Shlink\CLI\Util\ProcessRunnerInterface;
-use ShlinkioTest\Shlink\CLI\CliTestUtilsTrait;
+use ShlinkioTest\Shlink\CLI\Util\CliTestUtils;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Tester\CommandTester;
 use Symfony\Component\Lock\LockFactory;
@@ -21,95 +27,87 @@ use Symfony\Component\Process\PhpExecutableFinder;
 
 class CreateDatabaseCommandTest extends TestCase
 {
-    use CliTestUtilsTrait;
-
     private CommandTester $commandTester;
-    private ObjectProphecy $processHelper;
-    private ObjectProphecy $regularConn;
-    private ObjectProphecy $schemaManager;
-    private ObjectProphecy $databasePlatform;
+    private MockObject & ProcessRunnerInterface $processHelper;
+    private MockObject & Connection $regularConn;
+    private MockObject & ClassMetadataFactory $metadataFactory;
+    private MockObject & AbstractSchemaManager $schemaManager;
+    private MockObject & Driver $driver;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $locker = $this->prophesize(LockFactory::class);
-        $lock = $this->prophesize(LockInterface::class);
-        $lock->acquire(Argument::any())->willReturn(true);
-        $lock->release()->will(function (): void {
-        });
-        $locker->createLock(Argument::cetera())->willReturn($lock->reveal());
+        $locker = $this->createMock(LockFactory::class);
+        $lock = $this->createMock(LockInterface::class);
+        $lock->method('acquire')->withAnyParameters()->willReturn(true);
+        $locker->method('createLock')->withAnyParameters()->willReturn($lock);
 
-        $phpExecutableFinder = $this->prophesize(PhpExecutableFinder::class);
-        $phpExecutableFinder->find(false)->willReturn('/usr/local/bin/php');
+        $phpExecutableFinder = $this->createMock(PhpExecutableFinder::class);
+        $phpExecutableFinder->method('find')->with($this->isFalse())->willReturn('/usr/local/bin/php');
 
-        $this->processHelper = $this->prophesize(ProcessRunnerInterface::class);
-        $this->schemaManager = $this->prophesize(AbstractSchemaManager::class);
-        $this->databasePlatform = $this->prophesize(AbstractPlatform::class);
+        $this->processHelper = $this->createMock(ProcessRunnerInterface::class);
+        $this->schemaManager = $this->createMock(AbstractSchemaManager::class);
 
-        $this->regularConn = $this->prophesize(Connection::class);
-        $this->regularConn->getSchemaManager()->willReturn($this->schemaManager->reveal());
-        $this->regularConn->getDatabasePlatform()->willReturn($this->databasePlatform->reveal());
-        $noDbNameConn = $this->prophesize(Connection::class);
-        $noDbNameConn->getSchemaManager()->willReturn($this->schemaManager->reveal());
+        $this->regularConn = $this->createMock(Connection::class);
+        $this->regularConn->method('createSchemaManager')->willReturn($this->schemaManager);
+        $this->driver = $this->createMock(Driver::class);
+        $this->regularConn->method('getDriver')->willReturn($this->driver);
 
-        $command = new CreateDatabaseCommand(
-            $locker->reveal(),
-            $this->processHelper->reveal(),
-            $phpExecutableFinder->reveal(),
-            $this->regularConn->reveal(),
-            $noDbNameConn->reveal(),
-        );
+        $this->metadataFactory = $this->createMock(ClassMetadataFactory::class);
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('getConnection')->willReturn($this->regularConn);
+        $em->method('getMetadataFactory')->willReturn($this->metadataFactory);
 
-        $this->commandTester = $this->testerForCommand($command);
+        $noDbNameConn = $this->createMock(Connection::class);
+        $noDbNameConn->method('createSchemaManager')->withAnyParameters()->willReturn($this->schemaManager);
+
+        $command = new CreateDatabaseCommand($locker, $this->processHelper, $phpExecutableFinder, $em, $noDbNameConn);
+        $this->commandTester = CliTestUtils::testerForCommand($command);
     }
 
-    /** @test */
+    #[Test]
     public function successMessageIsPrintedIfDatabaseAlreadyExists(): void
     {
-        $shlinkDatabase = 'shlink_database';
-        $getDatabase = $this->regularConn->getDatabase()->willReturn($shlinkDatabase);
-        $listDatabases = $this->schemaManager->listDatabases()->willReturn(['foo', $shlinkDatabase, 'bar']);
-        $createDatabase = $this->schemaManager->createDatabase($shlinkDatabase)->will(function (): void {
-        });
-        $listTables = $this->schemaManager->listTableNames()->willReturn(['foo_table', 'bar_table']);
+        $this->regularConn->expects($this->never())->method('getParams');
+        $this->driver->method('getDatabasePlatform')->willReturn($this->createMock(AbstractPlatform::class));
+
+        $metadataMock = $this->createMock(ClassMetadata::class);
+        $metadataMock->expects($this->once())->method('getTableName')->willReturn('foo_table');
+        $this->metadataFactory->method('getAllMetadata')->willReturn([$metadataMock]);
+        $this->schemaManager->expects($this->never())->method('createDatabase');
+        $this->schemaManager->expects($this->once())->method('listTableNames')->willReturn(['foo_table', 'bar_table']);
 
         $this->commandTester->execute([]);
         $output = $this->commandTester->getDisplay();
 
         self::assertStringContainsString('Database already exists. Run "db:migrate" command', $output);
-        $getDatabase->shouldHaveBeenCalledOnce();
-        $listDatabases->shouldHaveBeenCalledOnce();
-        $createDatabase->shouldNotHaveBeenCalled();
-        $listTables->shouldHaveBeenCalledOnce();
     }
 
-    /** @test */
+    #[Test]
     public function databaseIsCreatedIfItDoesNotExist(): void
     {
+        $this->driver->method('getDatabasePlatform')->willReturn($this->createMock(AbstractPlatform::class));
+
         $shlinkDatabase = 'shlink_database';
-        $getDatabase = $this->regularConn->getDatabase()->willReturn($shlinkDatabase);
-        $listDatabases = $this->schemaManager->listDatabases()->willReturn(['foo', 'bar']);
-        $createDatabase = $this->schemaManager->createDatabase($shlinkDatabase)->will(function (): void {
-        });
-        $listTables = $this->schemaManager->listTableNames()->willReturn(['foo_table', 'bar_table']);
+        $this->regularConn->expects($this->once())->method('getParams')->willReturn(['dbname' => $shlinkDatabase]);
+        $this->metadataFactory->method('getAllMetadata')->willReturn([]);
+        $this->schemaManager->expects($this->once())->method('createDatabase')->with($shlinkDatabase);
+        $this->schemaManager->expects($this->once())->method('listTableNames')->willThrowException(new Exception(''));
 
         $this->commandTester->execute([]);
-
-        $getDatabase->shouldHaveBeenCalledOnce();
-        $listDatabases->shouldHaveBeenCalledOnce();
-        $createDatabase->shouldHaveBeenCalledOnce();
-        $listTables->shouldHaveBeenCalledOnce();
     }
 
-    /** @test */
-    public function tablesAreCreatedIfDatabaseIsEmpty(): void
+    #[Test, DataProvider('provideEmptyDatabase')]
+    public function tablesAreCreatedIfDatabaseIsEmpty(array $tables): void
     {
-        $shlinkDatabase = 'shlink_database';
-        $getDatabase = $this->regularConn->getDatabase()->willReturn($shlinkDatabase);
-        $listDatabases = $this->schemaManager->listDatabases()->willReturn(['foo', $shlinkDatabase, 'bar']);
-        $createDatabase = $this->schemaManager->createDatabase($shlinkDatabase)->will(function (): void {
-        });
-        $listTables = $this->schemaManager->listTableNames()->willReturn([]);
-        $runCommand = $this->processHelper->run(Argument::type(OutputInterface::class), [
+        $this->regularConn->expects($this->never())->method('getParams');
+        $this->driver->method('getDatabasePlatform')->willReturn($this->createMock(AbstractPlatform::class));
+
+        $metadata = $this->createMock(ClassMetadata::class);
+        $metadata->method('getTableName')->willReturn('shlink_table');
+        $this->metadataFactory->method('getAllMetadata')->willReturn([$metadata]);
+        $this->schemaManager->expects($this->never())->method('createDatabase');
+        $this->schemaManager->expects($this->once())->method('listTableNames')->willReturn($tables);
+        $this->processHelper->expects($this->once())->method('run')->with($this->isInstanceOf(OutputInterface::class), [
             '/usr/local/bin/php',
             CreateDatabaseCommand::DOCTRINE_SCRIPT,
             CreateDatabaseCommand::DOCTRINE_CREATE_SCHEMA_COMMAND,
@@ -121,30 +119,11 @@ class CreateDatabaseCommandTest extends TestCase
 
         self::assertStringContainsString('Creating database tables...', $output);
         self::assertStringContainsString('Database properly created!', $output);
-        $getDatabase->shouldHaveBeenCalledOnce();
-        $listDatabases->shouldHaveBeenCalledOnce();
-        $createDatabase->shouldNotHaveBeenCalled();
-        $listTables->shouldHaveBeenCalledOnce();
-        $runCommand->shouldHaveBeenCalledOnce();
     }
 
-    /** @test */
-    public function databaseCheckIsSkippedForSqlite(): void
+    public static function provideEmptyDatabase(): iterable
     {
-        $this->databasePlatform->getName()->willReturn('sqlite');
-
-        $shlinkDatabase = 'shlink_database';
-        $getDatabase = $this->regularConn->getDatabase()->willReturn($shlinkDatabase);
-        $listDatabases = $this->schemaManager->listDatabases()->willReturn(['foo', 'bar']);
-        $createDatabase = $this->schemaManager->createDatabase($shlinkDatabase)->will(function (): void {
-        });
-        $listTables = $this->schemaManager->listTableNames()->willReturn(['foo_table', 'bar_table']);
-
-        $this->commandTester->execute([]);
-
-        $getDatabase->shouldNotHaveBeenCalled();
-        $listDatabases->shouldNotHaveBeenCalled();
-        $createDatabase->shouldNotHaveBeenCalled();
-        $listTables->shouldHaveBeenCalledOnce();
+        yield 'no tables' => [[]];
+        yield 'migrations table' => [['non_shlink_table']];
     }
 }

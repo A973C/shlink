@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Shlinkio\Shlink\CLI\Command\Tag;
 
-use Shlinkio\Shlink\CLI\Util\ExitCodes;
+use Shlinkio\Shlink\CLI\Util\ExitCode;
 use Shlinkio\Shlink\Core\Exception\TagConflictException;
 use Shlinkio\Shlink\Core\Exception\TagNotFoundException;
 use Shlinkio\Shlink\Core\Tag\Model\TagRenaming;
@@ -19,12 +19,9 @@ class RenameTagCommand extends Command
 {
     public const NAME = 'tag:rename';
 
-    private TagServiceInterface $tagService;
-
-    public function __construct(TagServiceInterface $tagService)
+    public function __construct(private readonly TagServiceInterface $tagService)
     {
         parent::__construct();
-        $this->tagService = $tagService;
     }
 
     protected function configure(): void
@@ -45,10 +42,10 @@ class RenameTagCommand extends Command
         try {
             $this->tagService->renameTag(TagRenaming::fromNames($oldName, $newName));
             $io->success('Tag properly renamed.');
-            return ExitCodes::EXIT_SUCCESS;
+            return ExitCode::EXIT_SUCCESS;
         } catch (TagNotFoundException | TagConflictException $e) {
             $io->error($e->getMessage());
-            return ExitCodes::EXIT_FAILURE;
+            return ExitCode::EXIT_FAILURE;
         }
     }
 }

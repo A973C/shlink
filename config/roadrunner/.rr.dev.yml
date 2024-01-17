@@ -1,0 +1,42 @@
+version: '3'
+
+rpc:
+  listen: tcp://127.0.0.1:6001
+
+server:
+  command: 'php ../../bin/roadrunner-worker.php'
+
+http:
+  address: '0.0.0.0:8080'
+  middleware: ['static']
+  static:
+    dir: '../../public'
+    forbid: ['.php', '.htaccess']
+  pool:
+    num_workers: 1
+    debug: true
+
+jobs:
+  pool:
+    num_workers: 1
+    debug: true
+  timeout: 300
+  consume: ['shlink']
+  pipelines:
+    shlink:
+      driver: memory
+      config:
+        priority: 10
+        prefetch: 10
+
+logs:
+  mode: development
+  channels:
+    http:
+      mode: 'off' # Disable logging as Shlink handles it internally
+    server:
+      level: info
+    metrics:
+      level: debug
+    jobs:
+      level: debug

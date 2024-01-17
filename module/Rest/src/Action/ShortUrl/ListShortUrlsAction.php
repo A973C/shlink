@@ -9,8 +9,8 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Shlinkio\Shlink\Common\Paginator\Util\PagerfantaUtilsTrait;
 use Shlinkio\Shlink\Common\Rest\DataTransformerInterface;
-use Shlinkio\Shlink\Core\Model\ShortUrlsParams;
-use Shlinkio\Shlink\Core\Service\ShortUrlServiceInterface;
+use Shlinkio\Shlink\Core\ShortUrl\Model\ShortUrlsParams;
+use Shlinkio\Shlink\Core\ShortUrl\ShortUrlListServiceInterface;
 use Shlinkio\Shlink\Rest\Action\AbstractRestAction;
 use Shlinkio\Shlink\Rest\Middleware\AuthenticationMiddleware;
 
@@ -21,13 +21,10 @@ class ListShortUrlsAction extends AbstractRestAction
     protected const ROUTE_PATH = '/short-urls';
     protected const ROUTE_ALLOWED_METHODS = [self::METHOD_GET];
 
-    private ShortUrlServiceInterface $shortUrlService;
-    private DataTransformerInterface $transformer;
-
-    public function __construct(ShortUrlServiceInterface $shortUrlService, DataTransformerInterface $transformer)
-    {
-        $this->shortUrlService = $shortUrlService;
-        $this->transformer = $transformer;
+    public function __construct(
+        private readonly ShortUrlListServiceInterface $shortUrlService,
+        private readonly DataTransformerInterface $transformer,
+    ) {
     }
 
     public function handle(Request $request): Response

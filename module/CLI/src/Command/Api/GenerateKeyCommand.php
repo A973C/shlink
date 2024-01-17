@@ -6,11 +6,13 @@ namespace Shlinkio\Shlink\CLI\Command\Api;
 
 use Cake\Chronos\Chronos;
 use Shlinkio\Shlink\CLI\ApiKey\RoleResolverInterface;
-use Shlinkio\Shlink\CLI\Command\BaseCommand;
-use Shlinkio\Shlink\CLI\Util\ExitCodes;
+use Shlinkio\Shlink\CLI\Util\ExitCode;
 use Shlinkio\Shlink\CLI\Util\ShlinkTable;
+use Shlinkio\Shlink\Rest\ApiKey\Model\ApiKeyMeta;
 use Shlinkio\Shlink\Rest\ApiKey\Role;
+use Shlinkio\Shlink\Rest\Entity\ApiKey;
 use Shlinkio\Shlink\Rest\Service\ApiKeyServiceInterface;
+use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -19,24 +21,23 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 use function Shlinkio\Shlink\Core\arrayToString;
 use function sprintf;
 
-class GenerateKeyCommand extends BaseCommand
+class GenerateKeyCommand extends Command
 {
     public const NAME = 'api-key:generate';
 
-    private ApiKeyServiceInterface $apiKeyService;
-    private RoleResolverInterface $roleResolver;
-
-    public function __construct(ApiKeyServiceInterface $apiKeyService, RoleResolverInterface $roleResolver)
-    {
+    public function __construct(
+        private readonly ApiKeyServiceInterface $apiKeyService,
+        private readonly RoleResolverInterface $roleResolver,
+    ) {
         parent::__construct();
-        $this->apiKeyService = $apiKeyService;
-        $this->roleResolver = $roleResolver;
     }
 
     protected function configure(): void
     {
-        $authorOnly = RoleResolverInterface::AUTHOR_ONLY_PARAM;
-        $domainOnly = RoleResolverInterface::DOMAIN_ONLY_PARAM;
+        $authorOnly = Role::AUTHORED_SHORT_URLS->paramName();
+        $domainOnly = Role::DOMAIN_SPECIFIC->paramName();
+        $noOrphanVisits = Role::NO_ORPHAN_VISITS->paramName();
+
         $help = <<<HELP
         The <info>%command.name%</info> generates a new valid API key.
 
@@ -54,19 +55,20 @@ class GenerateKeyCommand extends BaseCommand
 
             * Can interact with short URLs created with this API key: <info>%command.full_name% --{$authorOnly}</info>
             * Can interact with short URLs for one domain: <info>%command.full_name% --{$domainOnly}=example.com</info>
-            * Both: <info>%command.full_name% --{$authorOnly} --{$domainOnly}=example.com</info>
+            * Cannot see orphan visits: <info>%command.full_name% --{$noOrphanVisits}</info>
+            * All: <info>%command.full_name% --{$authorOnly} --{$domainOnly}=example.com --{$noOrphanVisits}</info>
         HELP;
 
         $this
             ->setName(self::NAME)
-            ->setDescription('Generates a new valid API key.')
+            ->setDescription('Generate a new valid API key.')
             ->addOption(
                 'name',
                 'm',
                 InputOption::VALUE_REQUIRED,
                 'The name by which this API key will be known.',
             )
-            ->addOptionWithDeprecatedFallback(
+            ->addOption(
                 'expiration-date',
                 'e',
                 InputOption::VALUE_REQUIRED,
@@ -76,38 +78,48 @@ class GenerateKeyCommand extends BaseCommand
                 $authorOnly,
                 'a',
                 InputOption::VALUE_NONE,
-                sprintf('Adds the "%s" role to the new API key.', Role::AUTHORED_SHORT_URLS),
+                sprintf('Adds the "%s" role to the new API key.', Role::AUTHORED_SHORT_URLS->value),
             )
             ->addOption(
                 $domainOnly,
                 'd',
                 InputOption::VALUE_REQUIRED,
-                sprintf('Adds the "%s" role to the new API key, with the domain provided.', Role::DOMAIN_SPECIFIC),
+                sprintf(
+                    'Adds the "%s" role to the new API key, with the domain provided.',
+                    Role::DOMAIN_SPECIFIC->value,
+                ),
+            )
+            ->addOption(
+                $noOrphanVisits,
+                'o',
+                InputOption::VALUE_NONE,
+                sprintf('Adds the "%s" role to the new API key.', Role::NO_ORPHAN_VISITS->value),
             )
             ->setHelp($help);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): ?int
     {
-        $expirationDate = $this->getOptionWithDeprecatedFallback($input, 'expiration-date');
-        $apiKey = $this->apiKeyService->create(
-            isset($expirationDate) ? Chronos::parse($expirationDate) : null,
-            $input->getOption('name'),
-            ...$this->roleResolver->determineRoles($input),
-        );
+        $expirationDate = $input->getOption('expiration-date');
+
+        $apiKey = $this->apiKeyService->create(ApiKeyMeta::fromParams(
+            name: $input->getOption('name'),
+            expirationDate: isset($expirationDate) ? Chronos::parse($expirationDate) : null,
+            roleDefinitions: $this->roleResolver->determineRoles($input),
+        ));
 
         $io = new SymfonyStyle($input, $output);
         $io->success(sprintf('Generated API key: "%s"', $apiKey->toString()));
 
-        if (! $apiKey->isAdmin()) {
-            ShlinkTable::fromOutput($io)->render(
+        if (! ApiKey::isAdmin($apiKey)) {
+            ShlinkTable::default($io)->render(
                 ['Role name', 'Role metadata'],
-                $apiKey->mapRoles(fn (string $name, array $meta) => [$name, arrayToString($meta, 0)]),
+                $apiKey->mapRoles(fn (Role $role, array $meta) => [$role->value, arrayToString($meta, 0)]),
                 null,
                 'Roles',
             );
         }
 
-        return ExitCodes::EXIT_SUCCESS;
+        return ExitCode::EXIT_SUCCESS;
     }
 }

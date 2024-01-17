@@ -11,26 +11,21 @@ use Shlinkio\Shlink\Common\Util\DateRange;
 
 class InDateRange extends BaseSpecification
 {
-    private ?DateRange $dateRange;
-    private string $field;
-
-    public function __construct(?DateRange $dateRange, string $field = 'date')
+    public function __construct(private ?DateRange $dateRange, private string $field = 'date')
     {
         parent::__construct();
-        $this->dateRange = $dateRange;
-        $this->field = $field;
     }
 
     protected function getSpec(): Specification
     {
         $criteria = [];
 
-        if ($this->dateRange !== null && $this->dateRange->getStartDate() !== null) {
-            $criteria[] = Spec::gte($this->field, $this->dateRange->getStartDate()->toDateTimeString());
+        if ($this->dateRange?->startDate !== null) {
+            $criteria[] = Spec::gte($this->field, $this->dateRange->startDate->toDateTimeString());
         }
 
-        if ($this->dateRange !== null && $this->dateRange->getEndDate() !== null) {
-            $criteria[] = Spec::lte($this->field, $this->dateRange->getEndDate()->toDateTimeString());
+        if ($this->dateRange?->endDate !== null) {
+            $criteria[] = Spec::lte($this->field, $this->dateRange->endDate->toDateTimeString());
         }
 
         return Spec::andX(...$criteria);

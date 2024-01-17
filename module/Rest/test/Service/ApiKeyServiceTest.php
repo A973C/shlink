@@ -6,56 +6,60 @@ namespace ShlinkioTest\Shlink\Rest\Service;
 
 use Cake\Chronos\Chronos;
 use Doctrine\ORM\EntityManager;
-use Doctrine\ORM\EntityRepository;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
 use Shlinkio\Shlink\Common\Exception\InvalidArgumentException;
-use Shlinkio\Shlink\Core\Entity\Domain;
+use Shlinkio\Shlink\Core\Domain\Entity\Domain;
 use Shlinkio\Shlink\Rest\ApiKey\Model\ApiKeyMeta;
 use Shlinkio\Shlink\Rest\ApiKey\Model\RoleDefinition;
+use Shlinkio\Shlink\Rest\ApiKey\Repository\ApiKeyRepositoryInterface;
 use Shlinkio\Shlink\Rest\Entity\ApiKey;
 use Shlinkio\Shlink\Rest\Service\ApiKeyService;
 
 class ApiKeyServiceTest extends TestCase
 {
-    use ProphecyTrait;
-
     private ApiKeyService $service;
-    private ObjectProphecy $em;
+    private MockObject & EntityManager $em;
+    private MockObject & ApiKeyRepositoryInterface $repo;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->em = $this->prophesize(EntityManager::class);
-        $this->service = new ApiKeyService($this->em->reveal());
+        $this->em = $this->createMock(EntityManager::class);
+        $this->repo = $this->createMock(ApiKeyRepositoryInterface::class);
+        $this->service = new ApiKeyService($this->em);
     }
 
     /**
-     * @test
-     * @dataProvider provideCreationDate
      * @param RoleDefinition[] $roles
      */
+    #[Test, DataProvider('provideCreationDate')]
     public function apiKeyIsProperlyCreated(?Chronos $date, ?string $name, array $roles): void
     {
-        $this->em->flush()->shouldBeCalledOnce();
-        $this->em->persist(Argument::type(ApiKey::class))->shouldBeCalledOnce();
+        $this->em->expects($this->once())->method('flush');
+        $this->em->expects($this->once())->method('persist')->with($this->isInstanceOf(ApiKey::class));
 
-        $key = $this->service->create($date, $name, ...$roles);
+        $key = $this->service->create(
+            ApiKeyMeta::fromParams(name: $name, expirationDate: $date, roleDefinitions: $roles),
+        );
 
         self::assertEquals($date, $key->getExpirationDate());
         self::assertEquals($name, $key->name());
         foreach ($roles as $roleDefinition) {
-            self::assertTrue($key->hasRole($roleDefinition->roleName()));
+            self::assertTrue($key->hasRole($roleDefinition->role));
         }
     }
 
-    public function provideCreationDate(): iterable
+    public static function provideCreationDate(): iterable
     {
+        $domain = Domain::withAuthority('');
+        $domain->setId('123');
+
         yield 'no expiration date or name' => [null, null, []];
         yield 'expiration date' => [Chronos::parse('2030-01-01'), null, []];
         yield 'roles' => [null, null, [
-            RoleDefinition::forDomain((new Domain(''))->setId('123')),
+            RoleDefinition::forDomain($domain),
             RoleDefinition::forAuthoredShortUrls(),
         ]];
         yield 'single name' => [null, 'Alice', []];
@@ -63,69 +67,59 @@ class ApiKeyServiceTest extends TestCase
         yield 'empty name' => [null, '', []];
     }
 
-    /**
-     * @test
-     * @dataProvider provideInvalidApiKeys
-     */
+    #[Test, DataProvider('provideInvalidApiKeys')]
     public function checkReturnsFalseForInvalidApiKeys(?ApiKey $invalidKey): void
     {
-        $repo = $this->prophesize(EntityRepository::class);
-        $repo->findOneBy(['key' => '12345'])->willReturn($invalidKey)
-                                            ->shouldBeCalledOnce();
-        $this->em->getRepository(ApiKey::class)->willReturn($repo->reveal());
+        $this->repo->expects($this->once())->method('findOneBy')->with(['key' => '12345'])->willReturn($invalidKey);
+        $this->em->method('getRepository')->with(ApiKey::class)->willReturn($this->repo);
 
         $result = $this->service->check('12345');
 
         self::assertFalse($result->isValid());
-        self::assertSame($invalidKey, $result->apiKey());
+        self::assertSame($invalidKey, $result->apiKey);
     }
 
-    public function provideInvalidApiKeys(): iterable
+    public static function provideInvalidApiKeys(): iterable
     {
         yield 'non-existent api key' => [null];
         yield 'disabled api key' => [ApiKey::create()->disable()];
-        yield 'expired api key' => [ApiKey::fromMeta(ApiKeyMeta::withExpirationDate(Chronos::now()->subDay()))];
+        yield 'expired api key' => [
+            ApiKey::fromMeta(ApiKeyMeta::fromParams(expirationDate: Chronos::now()->subDays(1))),
+        ];
     }
 
-    /** @test */
+    #[Test]
     public function checkReturnsTrueWhenConditionsAreFavorable(): void
     {
         $apiKey = ApiKey::create();
 
-        $repo = $this->prophesize(EntityRepository::class);
-        $repo->findOneBy(['key' => '12345'])->willReturn($apiKey)
-                                            ->shouldBeCalledOnce();
-        $this->em->getRepository(ApiKey::class)->willReturn($repo->reveal());
+        $this->repo->expects($this->once())->method('findOneBy')->with(['key' => '12345'])->willReturn($apiKey);
+        $this->em->method('getRepository')->with(ApiKey::class)->willReturn($this->repo);
 
         $result = $this->service->check('12345');
 
         self::assertTrue($result->isValid());
-        self::assertSame($apiKey, $result->apiKey());
+        self::assertSame($apiKey, $result->apiKey);
     }
 
-    /** @test */
+    #[Test]
     public function disableThrowsExceptionWhenNoApiKeyIsFound(): void
     {
-        $repo = $this->prophesize(EntityRepository::class);
-        $repo->findOneBy(['key' => '12345'])->willReturn(null)
-                                            ->shouldBeCalledOnce();
-        $this->em->getRepository(ApiKey::class)->willReturn($repo->reveal());
+        $this->repo->expects($this->once())->method('findOneBy')->with(['key' => '12345'])->willReturn(null);
+        $this->em->method('getRepository')->with(ApiKey::class)->willReturn($this->repo);
 
         $this->expectException(InvalidArgumentException::class);
 
         $this->service->disable('12345');
     }
 
-    /** @test */
+    #[Test]
     public function disableReturnsDisabledApiKeyWhenFound(): void
     {
         $key = ApiKey::create();
-        $repo = $this->prophesize(EntityRepository::class);
-        $repo->findOneBy(['key' => '12345'])->willReturn($key)
-                                            ->shouldBeCalledOnce();
-        $this->em->getRepository(ApiKey::class)->willReturn($repo->reveal());
-
-        $this->em->flush()->shouldBeCalledOnce();
+        $this->repo->expects($this->once())->method('findOneBy')->with(['key' => '12345'])->willReturn($key);
+        $this->em->method('getRepository')->with(ApiKey::class)->willReturn($this->repo);
+        $this->em->expects($this->once())->method('flush');
 
         self::assertTrue($key->isEnabled());
         $returnedKey = $this->service->disable('12345');
@@ -133,33 +127,46 @@ class ApiKeyServiceTest extends TestCase
         self::assertSame($key, $returnedKey);
     }
 
-    /** @test */
+    #[Test]
     public function listFindsAllApiKeys(): void
     {
         $expectedApiKeys = [ApiKey::create(), ApiKey::create(), ApiKey::create()];
 
-        $repo = $this->prophesize(EntityRepository::class);
-        $repo->findBy([])->willReturn($expectedApiKeys)
-                         ->shouldBeCalledOnce();
-        $this->em->getRepository(ApiKey::class)->willReturn($repo->reveal());
+        $this->repo->expects($this->once())->method('findBy')->with([])->willReturn($expectedApiKeys);
+        $this->em->method('getRepository')->with(ApiKey::class)->willReturn($this->repo);
 
         $result = $this->service->listKeys();
 
         self::assertEquals($expectedApiKeys, $result);
     }
 
-    /** @test */
+    #[Test]
     public function listEnabledFindsOnlyEnabledApiKeys(): void
     {
         $expectedApiKeys = [ApiKey::create(), ApiKey::create(), ApiKey::create()];
 
-        $repo = $this->prophesize(EntityRepository::class);
-        $repo->findBy(['enabled' => true])->willReturn($expectedApiKeys)
-                                          ->shouldBeCalledOnce();
-        $this->em->getRepository(ApiKey::class)->willReturn($repo->reveal());
+        $this->repo->expects($this->once())->method('findBy')->with(['enabled' => true])->willReturn($expectedApiKeys);
+        $this->em->method('getRepository')->with(ApiKey::class)->willReturn($this->repo);
 
-        $result = $this->service->listKeys(true);
+        $result = $this->service->listKeys(enabledOnly: true);
 
         self::assertEquals($expectedApiKeys, $result);
+    }
+
+    #[Test, DataProvider('provideInitialApiKeys')]
+    public function createInitialDelegatesToRepository(?ApiKey $apiKey): void
+    {
+        $this->repo->expects($this->once())->method('createInitialApiKey')->with('the_key')->willReturn($apiKey);
+        $this->em->method('getRepository')->with(ApiKey::class)->willReturn($this->repo);
+
+        $result = $this->service->createInitial('the_key');
+
+        self::assertSame($result, $apiKey);
+    }
+
+    public static function provideInitialApiKeys(): iterable
+    {
+        yield 'first api key' => [ApiKey::create()];
+        yield 'existing api keys' => [null];
     }
 }

@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace Shlinkio\Shlink\CLI\Command\ShortUrl;
 
-use Shlinkio\Shlink\CLI\Util\ExitCodes;
+use Shlinkio\Shlink\CLI\Util\ExitCode;
 use Shlinkio\Shlink\Core\Exception;
-use Shlinkio\Shlink\Core\Model\ShortUrlIdentifier;
-use Shlinkio\Shlink\Core\Service\ShortUrl\DeleteShortUrlServiceInterface;
+use Shlinkio\Shlink\Core\ShortUrl\DeleteShortUrlServiceInterface;
+use Shlinkio\Shlink\Core\ShortUrl\Model\ShortUrlIdentifier;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
@@ -21,12 +21,9 @@ class DeleteShortUrlCommand extends Command
 {
     public const NAME = 'short-url:delete';
 
-    private DeleteShortUrlServiceInterface $deleteShortUrlService;
-
-    public function __construct(DeleteShortUrlServiceInterface $deleteShortUrlService)
+    public function __construct(private readonly DeleteShortUrlServiceInterface $deleteShortUrlService)
     {
         parent::__construct();
-        $this->deleteShortUrlService = $deleteShortUrlService;
     }
 
     protected function configure(): void
@@ -58,10 +55,10 @@ class DeleteShortUrlCommand extends Command
 
         try {
             $this->runDelete($io, $identifier, $ignoreThreshold);
-            return ExitCodes::EXIT_SUCCESS;
+            return ExitCode::EXIT_SUCCESS;
         } catch (Exception\ShortUrlNotFoundException $e) {
             $io->error($e->getMessage());
-            return ExitCodes::EXIT_FAILURE;
+            return ExitCode::EXIT_FAILURE;
         } catch (Exception\DeleteShortUrlException $e) {
             return $this->retry($io, $identifier, $e->getMessage());
         }
@@ -78,12 +75,12 @@ class DeleteShortUrlCommand extends Command
             $io->warning('Short URL was not deleted.');
         }
 
-        return $forceDelete ? ExitCodes::EXIT_SUCCESS : ExitCodes::EXIT_WARNING;
+        return $forceDelete ? ExitCode::EXIT_SUCCESS : ExitCode::EXIT_WARNING;
     }
 
     private function runDelete(SymfonyStyle $io, ShortUrlIdentifier $identifier, bool $ignoreThreshold): void
     {
         $this->deleteShortUrlService->deleteByShortCode($identifier, $ignoreThreshold);
-        $io->success(sprintf('Short URL with short code "%s" successfully deleted.', $identifier->shortCode()));
+        $io->success(sprintf('Short URL with short code "%s" successfully deleted.', $identifier->shortCode));
     }
 }

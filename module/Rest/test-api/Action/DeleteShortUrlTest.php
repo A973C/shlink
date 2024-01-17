@@ -4,24 +4,29 @@ declare(strict_types=1);
 
 namespace ShlinkioApiTest\Shlink\Rest\Action;
 
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\DataProviderExternal;
+use PHPUnit\Framework\Attributes\Test;
 use Shlinkio\Shlink\TestUtils\ApiTest\ApiTestCase;
-use ShlinkioApiTest\Shlink\Rest\Utils\NotFoundUrlHelpersTrait;
+use ShlinkioApiTest\Shlink\Rest\Utils\ApiTestDataProviders;
+use ShlinkioApiTest\Shlink\Rest\Utils\UrlBuilder;
+
+use function sprintf;
 
 class DeleteShortUrlTest extends ApiTestCase
 {
-    use NotFoundUrlHelpersTrait;
-
-    /**
-     * @test
-     * @dataProvider provideInvalidUrls
-     */
+    #[Test, DataProviderExternal(ApiTestDataProviders::class, 'invalidUrlsProvider')]
     public function notFoundErrorIsReturnWhenDeletingInvalidUrl(
         string $shortCode,
         ?string $domain,
         string $expectedDetail,
-        string $apiKey
+        string $apiKey,
     ): void {
-        $resp = $this->callApiWithKey(self::METHOD_DELETE, $this->buildShortUrlPath($shortCode, $domain), [], $apiKey);
+        $resp = $this->callApiWithKey(
+            self::METHOD_DELETE,
+            UrlBuilder::buildShortUrlPath($shortCode, $domain),
+            apiKey: $apiKey,
+        );
         $payload = $this->getJsonResponsePayload($resp);
 
         self::assertEquals(self::STATUS_NOT_FOUND, $resp->getStatusCode());
@@ -33,26 +38,26 @@ class DeleteShortUrlTest extends ApiTestCase
         self::assertEquals($domain, $payload['domain'] ?? null);
     }
 
-    /** @test */
-    public function unprocessableEntityIsReturnedWhenTryingToDeleteUrlWithTooManyVisits(): void
+    #[Test, DataProvider('provideApiVersions')]
+    public function expectedTypeIsReturnedBasedOnApiVersion(string $version, string $expectedType): void
     {
-        // Generate visits first
-        for ($i = 0; $i < 20; $i++) {
-            self::assertEquals(self::STATUS_FOUND, $this->callShortUrl('abc123')->getStatusCode());
-        }
-        $expectedDetail = 'Impossible to delete short URL with short code "abc123" since it has more than "15" visits.';
-
-        $resp = $this->callApiWithKey(self::METHOD_DELETE, '/short-urls/abc123');
+        $resp = $this->callApiWithKey(
+            self::METHOD_DELETE,
+            sprintf('/rest/v%s/short-urls/invalid-short-code', $version),
+        );
         $payload = $this->getJsonResponsePayload($resp);
 
-        self::assertEquals(self::STATUS_UNPROCESSABLE_ENTITY, $resp->getStatusCode());
-        self::assertEquals(self::STATUS_UNPROCESSABLE_ENTITY, $payload['status']);
-        self::assertEquals('INVALID_SHORTCODE_DELETION', $payload['type']);
-        self::assertEquals($expectedDetail, $payload['detail']);
-        self::assertEquals('Cannot delete short URL', $payload['title']);
+        self::assertEquals($expectedType, $payload['type']);
     }
 
-    /** @test */
+    public static function provideApiVersions(): iterable
+    {
+        yield ['1', 'INVALID_SHORTCODE'];
+        yield ['2', 'INVALID_SHORTCODE'];
+        yield ['3', 'https://shlink.io/api/error/short-url-not-found'];
+    }
+
+    #[Test]
     public function properShortUrlIsDeletedWhenDomainIsProvided(): void
     {
         $fetchWithDomainBefore = $this->callApiWithKey(self::METHOD_GET, '/short-urls/ghi789?domain=example.com');

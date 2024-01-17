@@ -1,8 +1,8 @@
 {
-    "asyncapi": "2.0.0",
+    "asyncapi": "2.4.0",
     "info": {
         "title": "Shlink",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "description": "Shlink, the self-hosted URL shortener",
         "license": {
             "name": "MIT",
@@ -11,7 +11,7 @@
     },
     "defaultContentType": "application/json",
     "channels": {
-        "http://shlink.io/new-visit": {
+        "https://shlink.io/new-visit": {
             "subscribe": {
                 "summary": "Receive information about any new visit occurring on any short URL.",
                 "operationId": "newVisit",
@@ -31,7 +31,7 @@
                 }
             }
         },
-        "http://shlink.io/new-visit/{shortCode}": {
+        "https://shlink.io/new-visit/{shortCode}": {
             "parameters": {
                 "shortCode": {
                     "description": "The short code of the short URL",
@@ -59,7 +59,7 @@
                 }
             }
         },
-        "http://shlink.io/new-orphan-visit": {
+        "https://shlink.io/new-orphan-visit": {
             "subscribe": {
                 "summary": "Receive information about any new orphan visit.",
                 "operationId": "newOrphanVisit",
@@ -70,6 +70,23 @@
                         "properties": {
                             "visit": {
                                 "$ref": "#/components/schemas/OrphanVisit"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "https://shlink.io/new-short-url": {
+            "subscribe": {
+                "summary": "Receive information about any new short URL.",
+                "operationId": "newshortUrl",
+                "message": {
+                    "payload": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "shortUrl": {
+                                "$ref": "#/components/schemas/ShortUrl"
                             }
                         }
                     }
@@ -94,14 +111,21 @@
                         "type": "string",
                         "description": "The original long URL."
                     },
+                    "deviceLongUrls": {
+                        "$ref": "#/components/schemas/DeviceLongUrls"
+                    },
                     "dateCreated": {
                         "type": "string",
                         "format": "date-time",
                         "description": "The date in which the short URL was created in ISO format."
                     },
+                    "visitsSummary": {
+                        "$ref": "#/components/schemas/VisitsSummary"
+                    },
                     "visitsCount": {
+                        "deprecated": true,
                         "type": "integer",
-                        "description": "The number of visits that this short URL has recieved."
+                        "description": "The number of visits that this short URL has received."
                     },
                     "tags": {
                         "type": "array",
@@ -116,14 +140,32 @@
                     "domain": {
                         "type": "string",
                         "description": "The domain in which the short URL was created. Null if it belongs to default domain."
+                    },
+                    "title": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "A descriptive title of the short URL."
+                    },
+                    "crawlable": {
+                        "type": "boolean",
+                        "description": "Tells if this URL will be included as 'Allow' in Shlink's robots.txt."
                     }
                 },
                 "example": {
                     "shortCode": "12C18",
-                    "shortUrl": "https://doma.in/12C18",
+                    "shortUrl": "https://s.test/12C18",
                     "longUrl": "https://store.steampowered.com",
+                    "deviceLongUrls": {
+                        "android": "https://store.steampowered.com/android",
+                        "ios": "https://store.steampowered.com/ios",
+                        "desktop": null
+                    },
                     "dateCreated": "2016-08-21T20:34:16+02:00",
-                    "visitsCount": 328,
+                    "visitsSummary": {
+                        "total": 328,
+                        "nonBots": 285,
+                        "bots": 43
+                    },
                     "tags": [
                         "games",
                         "tech"
@@ -133,7 +175,9 @@
                         "validUntil": null,
                         "maxVisits": 100
                     },
-                    "domain": "example.com"
+                    "domain": "example.com",
+                    "title": "The title",
+                    "crawlable": false
                 }
             },
             "ShortUrlMeta": {
@@ -161,6 +205,42 @@
                     }
                 }
             },
+            "VisitsSummary": {
+                "type": "object",
+                "required": ["total", "nonBots", "bots"],
+                "properties": {
+                    "total": {
+                        "description": "The total amount of visits",
+                        "type": "number"
+                    },
+                    "nonBots": {
+                        "description": "The amount of visits which were not identified as bots",
+                        "type": "number"
+                    },
+                    "bots": {
+                        "description": "The amount of visits that were identified as potential bots",
+                        "type": "number"
+                    }
+                }
+            },
+            "DeviceLongUrls": {
+                "type": "object",
+                "required": ["android", "ios", "desktop"],
+                "properties": {
+                    "android": {
+                        "description": "The long URL to redirect to when the short URL is visited from a device running Android",
+                        "type": "string"
+                    },
+                    "ios": {
+                        "description": "The long URL to redirect to when the short URL is visited from a device running iOS",
+                        "type": "string"
+                    },
+                    "desktop": {
+                        "description": "The long URL to redirect to when the short URL is visited from a desktop browser",
+                        "type": "string"
+                    }
+                }
+            },
             "Visit": {
                 "type": "object",
                 "properties": {
@@ -179,6 +259,10 @@
                     },
                     "visitLocation": {
                         "$ref": "#/components/schemas/VisitLocation"
+                    },
+                    "potentialBot": {
+                        "type": "boolean",
+                        "description": "Tells if Shlink thinks this visit comes potentially from a bot or crawler"
                     }
                 },
                 "example": {
@@ -193,7 +277,8 @@
                         "longitude": -122.0946,
                         "regionName": "California",
                         "timezone": "America/Los_Angeles"
-                    }
+                    },
+                    "potentialBot": false
                 }
             },
             "OrphanVisit": {
@@ -232,7 +317,8 @@
                         "regionName": "California",
                         "timezone": "America/Los_Angeles"
                     },
-                    "visitedUrl": "https://doma.in",
+                    "potentialBot": false,
+                    "visitedUrl": "https://s.test",
                     "type": "base_url"
                 }
             },

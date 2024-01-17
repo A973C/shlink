@@ -4,88 +4,33 @@ declare(strict_types=1);
 
 namespace Shlinkio\Shlink\Core\Options;
 
-use Laminas\Stdlib\AbstractOptions;
+use Shlinkio\Shlink\Core\ShortUrl\Model\ShortUrlMode;
 
-use function Functional\contains;
+use const Shlinkio\Shlink\DEFAULT_SHORT_CODES_LENGTH;
 
-use const Shlinkio\Shlink\Core\DEFAULT_REDIRECT_CACHE_LIFETIME;
-use const Shlinkio\Shlink\Core\DEFAULT_REDIRECT_STATUS_CODE;
-
-class UrlShortenerOptions extends AbstractOptions
+final class UrlShortenerOptions
 {
-    protected $__strictMode__ = false; // phpcs:ignore
-
-    private bool $validateUrl = true;
-    private int $redirectStatusCode = DEFAULT_REDIRECT_STATUS_CODE;
-    private int $redirectCacheLifetime = DEFAULT_REDIRECT_CACHE_LIFETIME;
-    private bool $autoResolveTitles = false;
-    private bool $anonymizeRemoteAddr = true;
-    private bool $trackOrphanVisits = true;
-
-    public function isUrlValidationEnabled(): bool
-    {
-        return $this->validateUrl;
+    /**
+     * @param array{schema: ?string, hostname: ?string} $domain
+     */
+    public function __construct(
+        public readonly array $domain = ['schema' => null, 'hostname' => null],
+        public readonly int $defaultShortCodesLength = DEFAULT_SHORT_CODES_LENGTH,
+        public readonly bool $autoResolveTitles = false,
+        public readonly bool $appendExtraPath = false,
+        public readonly bool $multiSegmentSlugsEnabled = false,
+        public readonly bool $trailingSlashEnabled = false,
+        public readonly ShortUrlMode $mode = ShortUrlMode::STRICT,
+    ) {
     }
 
-    protected function setValidateUrl(bool $validateUrl): void
+    public function isLooseMode(): bool
     {
-        $this->validateUrl = $validateUrl;
+        return $this->mode === ShortUrlMode::LOOSE;
     }
 
-    public function redirectStatusCode(): int
+    public function defaultDomain(): string
     {
-        return $this->redirectStatusCode;
-    }
-
-    protected function setRedirectStatusCode(int $redirectStatusCode): void
-    {
-        $this->redirectStatusCode = $this->normalizeRedirectStatusCode($redirectStatusCode);
-    }
-
-    private function normalizeRedirectStatusCode(int $statusCode): int
-    {
-        return contains([301, 302], $statusCode) ? $statusCode : DEFAULT_REDIRECT_STATUS_CODE;
-    }
-
-    public function redirectCacheLifetime(): int
-    {
-        return $this->redirectCacheLifetime;
-    }
-
-    protected function setRedirectCacheLifetime(int $redirectCacheLifetime): void
-    {
-        $this->redirectCacheLifetime = $redirectCacheLifetime > 0
-            ? $redirectCacheLifetime
-            : DEFAULT_REDIRECT_CACHE_LIFETIME;
-    }
-
-    public function autoResolveTitles(): bool
-    {
-        return $this->autoResolveTitles;
-    }
-
-    protected function setAutoResolveTitles(bool $autoResolveTitles): void
-    {
-        $this->autoResolveTitles = $autoResolveTitles;
-    }
-
-    public function anonymizeRemoteAddr(): bool
-    {
-        return $this->anonymizeRemoteAddr;
-    }
-
-    protected function setAnonymizeRemoteAddr(bool $anonymizeRemoteAddr): void
-    {
-        $this->anonymizeRemoteAddr = $anonymizeRemoteAddr;
-    }
-
-    public function trackOrphanVisits(): bool
-    {
-        return $this->trackOrphanVisits;
-    }
-
-    protected function setTrackOrphanVisits(bool $trackOrphanVisits): void
-    {
-        $this->trackOrphanVisits = $trackOrphanVisits;
+        return $this->domain['hostname'] ?? '';
     }
 }

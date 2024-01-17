@@ -5,23 +5,22 @@ declare(strict_types=1);
 namespace ShlinkioTest\Shlink\CLI\Factory;
 
 use Laminas\ServiceManager\ServiceManager;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Shlinkio\Shlink\CLI\Factory\ApplicationFactory;
 use Shlinkio\Shlink\Core\Options\AppOptions;
-use ShlinkioTest\Shlink\CLI\CliTestUtilsTrait;
+use ShlinkioTest\Shlink\CLI\Util\CliTestUtils;
 
 class ApplicationFactoryTest extends TestCase
 {
-    use CliTestUtilsTrait;
-
     private ApplicationFactory $factory;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
         $this->factory = new ApplicationFactory();
     }
 
-    /** @test */
+    #[Test]
     public function allCommandsWhichAreServicesAreAdded(): void
     {
         $sm = $this->createServiceManager([
@@ -31,8 +30,8 @@ class ApplicationFactoryTest extends TestCase
                 'baz' => 'baz',
             ],
         ]);
-        $sm->setService('foo', $this->createCommandMock('foo')->reveal());
-        $sm->setService('bar', $this->createCommandMock('bar')->reveal());
+        $sm->setService('foo', CliTestUtils::createCommandMock('foo'));
+        $sm->setService('bar', CliTestUtils::createCommandMock('bar'));
 
         $instance = ($this->factory)($sm);
 

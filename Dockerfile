@@ -1,57 +1,60 @@
-FROM php:8.0.2-alpine3.13 as base
+FROM php:8.2-alpine3.17 as base
 
 ARG SHLINK_VERSION=latest
 ENV SHLINK_VERSION ${SHLINK_VERSION}
-ENV SWOOLE_VERSION 4.6.3
-ENV PDO_SQLSRV_VERSION 5.9.0
-ENV LC_ALL "C"
+ARG SHLINK_RUNTIME=rr
+ENV SHLINK_RUNTIME ${SHLINK_RUNTIME}
+ARG SHLINK_USER_ID='root'
+ENV SHLINK_USER_ID ${SHLINK_USER_ID}
+
+ENV OPENSWOOLE_VERSION 22.1.0
+ENV PDO_SQLSRV_VERSION 5.11.1
+ENV MS_ODBC_DOWNLOAD 'b/9/f/b9f3cce4-3925-46d4-9f46-da08869c6486'
+ENV MS_ODBC_SQL_VERSION 18_18.1.1.1
+ENV LC_ALL 'C'
 
 WORKDIR /etc/shlink
 
 # Install required PHP extensions
 RUN \
-    # Install mysql and calendar
-    docker-php-ext-install -j"$(nproc)" pdo_mysql calendar && \
-    # Install sqlite
-    apk add --no-cache sqlite-libs sqlite-dev && \
+    # Temp install dev dependencies needed to compile the extensions
+    apk add --no-cache --virtual .dev-deps sqlite-dev postgresql-dev icu-dev libzip-dev zlib-dev libpng-dev linux-headers && \
+    docker-php-ext-install -j"$(nproc)" pdo_mysql pdo_pgsql intl calendar sockets bcmath zip gd && \
+    apk add --no-cache sqlite-libs && \
     docker-php-ext-install -j"$(nproc)" pdo_sqlite && \
-    # Install postgres
-    apk add --no-cache postgresql-dev && \
-    docker-php-ext-install -j"$(nproc)" pdo_pgsql && \
-    # Install intl
-    apk add --no-cache icu-dev && \
-    docker-php-ext-install -j"$(nproc)" intl && \
-    # Install zip and gd
-    apk add --no-cache libzip-dev zlib-dev libpng-dev && \
-    docker-php-ext-install -j"$(nproc)" zip gd && \
-    # Install gmp
-    apk add --no-cache gmp-dev && \
-    docker-php-ext-install -j"$(nproc)" gmp
+    # Remove temp dev extensions, and install prod equivalents that are required at runtime
+    apk del .dev-deps && \
+    apk add --no-cache postgresql icu libzip libpng
 
-# Install sqlsrv driver
-RUN if [ $(uname -m) == "x86_64" ]; then \
-      wget https://download.microsoft.com/download/e/4/e/e4e67866-dffd-428c-aac7-8d28ddafb39b/msodbcsql17_17.5.1.1-1_amd64.apk && \
-      apk add --allow-untrusted msodbcsql17_17.5.1.1-1_amd64.apk && \
-      apk add --no-cache --virtual .phpize-deps ${PHPIZE_DEPS} unixodbc-dev && \
+# Install openswoole and sqlsrv driver for x86_64 builds
+RUN apk add --no-cache --virtual .phpize-deps ${PHPIZE_DEPS} unixodbc-dev && \
+    if [ "$SHLINK_RUNTIME" == 'openswoole' ]; then \
+        # Openswoole is deprecated. Remove in v4.0.0
+        pecl install openswoole-${OPENSWOOLE_VERSION} && \
+        docker-php-ext-enable openswoole ; \
+    fi; \
+    if [ $(uname -m) == "x86_64" ]; then \
+      wget https://download.microsoft.com/download/${MS_ODBC_DOWNLOAD}/msodbcsql${MS_ODBC_SQL_VERSION}-1_amd64.apk && \
+      apk add --allow-untrusted msodbcsql${MS_ODBC_SQL_VERSION}-1_amd64.apk && \
       pecl install pdo_sqlsrv-${PDO_SQLSRV_VERSION} && \
       docker-php-ext-enable pdo_sqlsrv && \
-      apk del .phpize-deps && \
-      rm msodbcsql17_17.5.1.1-1_amd64.apk ; \
-    fi
-
-# Install swoole
-RUN apk add --no-cache --virtual .phpize-deps ${PHPIZE_DEPS} && \
-    pecl install swoole-${SWOOLE_VERSION} && \
-    docker-php-ext-enable swoole && \
+      rm msodbcsql${MS_ODBC_SQL_VERSION}-1_amd64.apk ; \
+    fi; \
     apk del .phpize-deps
-
 
 # Install shlink
 FROM base as builder
 COPY . .
 COPY --from=composer:2 /usr/bin/composer ./composer.phar
 RUN apk add --no-cache git && \
-    php composer.phar install --no-dev --optimize-autoloader --prefer-dist --no-progress --no-interaction && \
+    # FIXME Ignoring ext-openswoole platform req, as it makes install fail with roadrunner, even though it's a dev dependency and we are passing --no-dev
+    php composer.phar install --no-dev --prefer-dist --optimize-autoloader --no-progress --no-interaction --ignore-platform-req=ext-openswoole && \
+    if [ "$SHLINK_RUNTIME" == 'openswoole' ]; then \
+        # Openswoole is deprecated. Remove in v4.0.0
+        php composer.phar remove spiral/roadrunner spiral/roadrunner-jobs spiral/roadrunner-cli spiral/roadrunner-http --with-all-dependencies --update-no-dev --optimize-autoloader --no-progress --no-interaction ; \
+    elif [ "$SHLINK_RUNTIME" == 'rr' ]; then \
+        php composer.phar remove mezzio/mezzio-swoole --with-all-dependencies --update-no-dev --optimize-autoloader --no-progress --no-interaction --ignore-platform-req=ext-openswoole ; \
+    fi; \
     php composer.phar clear-cache && \
     rm -r docker composer.* && \
     sed -i "s/%SHLINK_VERSION%/${SHLINK_VERSION}/g" config/autoload/app_options.global.php
@@ -61,20 +64,20 @@ RUN apk add --no-cache git && \
 FROM base
 LABEL maintainer="Alejandro Celaya <alejandro@alejandrocelaya.com>"
 
-COPY --from=builder /etc/shlink .
-RUN ln -s /etc/shlink/bin/cli /usr/local/bin/shlink
+COPY --from=builder --chown=${SHLINK_USER_ID} /etc/shlink .
+RUN ln -s /etc/shlink/bin/cli /usr/local/bin/shlink && \
+    if [ "$SHLINK_RUNTIME" == 'rr' ]; then \
+      php ./vendor/bin/rr get --no-interaction --no-config --location bin/ && chmod +x bin/rr ; \
+    fi;
 
-# Expose default swoole port
+# Expose default port
 EXPOSE 8080
-
-# Expose params config dir, since the user is expected to provide custom config from there
-VOLUME /etc/shlink/config/params
-# Expose data dir to allow persistent runtime data and SQLite db
-VOLUME /etc/shlink/data
 
 # Copy config specific for the image
 COPY docker/docker-entrypoint.sh docker-entrypoint.sh
 COPY docker/config/shlink_in_docker.local.php config/autoload/shlink_in_docker.local.php
 COPY docker/config/php.ini ${PHP_INI_DIR}/conf.d/
+
+USER ${SHLINK_USER_ID}
 
 ENTRYPOINT ["/bin/sh", "./docker-entrypoint.sh"]

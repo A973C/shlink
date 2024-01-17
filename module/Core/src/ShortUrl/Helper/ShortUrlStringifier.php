@@ -5,36 +5,32 @@ declare(strict_types=1);
 namespace Shlinkio\Shlink\Core\ShortUrl\Helper;
 
 use Laminas\Diactoros\Uri;
-use Shlinkio\Shlink\Core\Entity\ShortUrl;
+use Shlinkio\Shlink\Core\ShortUrl\Entity\ShortUrl;
 
 use function sprintf;
 
 class ShortUrlStringifier implements ShortUrlStringifierInterface
 {
-    private array $domainConfig;
-    private string $basePath;
-
-    public function __construct(array $domainConfig, string $basePath = '')
+    /**
+     * @param array{schema?: string, hostname?: string} $domainConfig
+     */
+    public function __construct(private readonly array $domainConfig, private readonly string $basePath = '')
     {
-        $this->domainConfig = $domainConfig;
-        $this->basePath = $basePath;
     }
 
     public function stringify(ShortUrl $shortUrl): string
     {
-        return (new Uri())->withPath($shortUrl->getShortCode())
-                          ->withScheme($this->domainConfig['schema'] ?? 'http')
-                          ->withHost($this->resolveDomain($shortUrl))
-                          ->__toString();
+        $uriWithoutShortCode = (new Uri())->withScheme($this->domainConfig['schema'] ?? 'http')
+                                          ->withHost($this->resolveDomain($shortUrl))
+                                          ->withPath($this->basePath)
+                                          ->__toString();
+
+        // The short code needs to be appended to avoid it from being URL-encoded
+        return sprintf('%s/%s', $uriWithoutShortCode, $shortUrl->getShortCode());
     }
 
     private function resolveDomain(ShortUrl $shortUrl): string
     {
-        $domain = $shortUrl->getDomain();
-        if ($domain === null) {
-            return $this->domainConfig['hostname'] ?? '';
-        }
-
-        return sprintf('%s%s', $domain->getAuthority(), $this->basePath);
+        return $shortUrl->getDomain()?->authority ?? $this->domainConfig['hostname'] ?? '';
     }
 }

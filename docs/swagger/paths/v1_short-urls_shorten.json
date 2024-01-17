@@ -1,11 +1,12 @@
 {
     "get": {
         "operationId": "shortenUrl",
+        "deprecated": true,
         "tags": [
             "Short URLs"
         ],
         "summary": "Create a short URL",
-        "description": "Creates a short URL in a single API call. Useful for third party integrations.",
+        "description": "**[Deprecated]** Use [Create short URL](#/Short%20URLs/createShortUrl) instead",
         "parameters": [
             {
                 "$ref": "../parameters/version.json"
@@ -49,34 +50,42 @@
                     "application/json": {
                         "schema": {
                             "$ref": "../definitions/ShortUrl.json"
+                        },
+                        "example": {
+                            "longUrl": "https://github.com/shlinkio/shlink",
+                            "deviceLongUrls": {
+                                "android": null,
+                                "ios": null,
+                                "desktop": null
+                            },
+                            "shortUrl": "https://s.test/abc123",
+                            "shortCode": "abc123",
+                            "dateCreated": "2016-08-21T20:34:16+02:00",
+                            "visitsSummary": {
+                                "total": 0,
+                                "nonBots": 0,
+                                "bots": 0
+                            },
+                            "tags": [
+                                "games",
+                                "tech"
+                            ],
+                            "meta": {
+                                "validSince": "2017-01-21T00:00:00+02:00",
+                                "validUntil": null,
+                                "maxVisits": 100
+                            },
+                            "domain": null,
+                            "title": null,
+                            "crawlable": false
                         }
                     },
                     "text/plain": {
                         "schema": {
                             "type": "string"
-                        }
-                    }
-                },
-                "examples": {
-                    "application/json": {
-                        "longUrl": "https://github.com/shlinkio/shlink",
-                        "shortUrl": "https://doma.in/abc123",
-                        "shortCode": "abc123",
-                        "dateCreated": "2016-08-21T20:34:16+02:00",
-                        "visitsCount": 0,
-                        "tags": [
-                            "games",
-                            "tech"
-                        ],
-                        "meta": {
-                            "validSince": "2017-01-21T00:00:00+02:00",
-                            "validUntil": null,
-                            "maxVisits": 100
                         },
-                        "domain": null,
-                        "title": null
-                    },
-                    "text/plain": "https://doma.in/abc123"
+                        "example": "https://s.test/abc123"
+                    }
                 }
             },
             "400": {
@@ -85,26 +94,44 @@
                     "application/problem+json": {
                         "schema": {
                             "$ref": "../definitions/Error.json"
+                        },
+                        "examples": {
+                            "API v3 and newer": {
+                                "value": {
+                                    "title": "Invalid URL",
+                                    "type": "https://shlink.io/api/error/invalid-url",
+                                    "detail": "Provided URL foo is invalid. Try with a different one.",
+                                    "status": 400,
+                                    "url": "https://invalid-url.com"
+                                }
+                            },
+                            "Previous to API v3": {
+                                "value": {
+                                    "title": "Invalid URL",
+                                    "type": "INVALID_URL",
+                                    "detail": "Provided URL foo is invalid. Try with a different one.",
+                                    "status": 400,
+                                    "url": "https://invalid-url.com"
+                                }
+                            }
                         }
                     },
                     "text/plain": {
                         "schema": {
                             "type": "string"
+                        },
+                        "examples": {
+                            "API v3 and newer": {
+                                "value": "https://shlink.io/api/error/invalid-url"
+                            },
+                            "Previous to API v3": {
+                                "value": "INVALID_URL"
+                            }
                         }
                     }
-                },
-                "examples": {
-                    "application/problem+json": {
-                        "title": "Invalid URL",
-                        "type": "INVALID_URL",
-                        "detail": "Provided URL foo is invalid. Try with a different one.",
-                        "status": 400,
-                        "url": "https://invalid-url.com"
-                    },
-                    "text/plain": "INVALID_URL"
                 }
             },
-            "500": {
+            "default": {
                 "description": "Unexpected error.",
                 "content": {
                     "application/problem+json": {
@@ -117,13 +144,6 @@
                             "type": "string"
                         }
                     }
-                },
-                "examples": {
-                    "application/problem+json": {
-                        "error": "INTERNAL_SERVER_ERROR",
-                        "message": "Unexpected error occurred"
-                    },
-                    "text/plain": "INTERNAL_SERVER_ERROR"
                 }
             }
         }

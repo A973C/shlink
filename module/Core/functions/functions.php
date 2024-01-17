@@ -4,45 +4,46 @@ declare(strict_types=1);
 
 namespace Shlinkio\Shlink\Core;
 
+use BackedEnum;
 use Cake\Chronos\Chronos;
 use DateTimeInterface;
-use Fig\Http\Message\StatusCodeInterface;
+use Doctrine\ORM\Mapping\Builder\FieldBuilder;
+use Jaybizzle\CrawlerDetect\CrawlerDetect;
+use Laminas\Filter\Word\CamelCaseToSeparator;
+use Laminas\Filter\Word\CamelCaseToUnderscore;
 use Laminas\InputFilter\InputFilter;
 use PUGX\Shortid\Factory as ShortIdFactory;
 use Shlinkio\Shlink\Common\Util\DateRange;
+use Shlinkio\Shlink\Core\ShortUrl\Model\ShortUrlMode;
 
-use function Functional\reduce_left;
+use function array_keys;
+use function array_map;
+use function array_reduce;
+use function date_default_timezone_get;
 use function is_array;
-use function lcfirst;
 use function print_r;
+use function Shlinkio\Shlink\Common\buildDateRange;
 use function sprintf;
 use function str_repeat;
-use function str_replace;
-use function ucwords;
+use function strtolower;
+use function ucfirst;
 
-const DEFAULT_DELETE_SHORT_URL_THRESHOLD = 15;
-const DEFAULT_SHORT_CODES_LENGTH = 5;
-const MIN_SHORT_CODES_LENGTH = 4;
-const DEFAULT_REDIRECT_STATUS_CODE = StatusCodeInterface::STATUS_FOUND;
-const DEFAULT_REDIRECT_CACHE_LIFETIME = 30;
-const LOCAL_LOCK_FACTORY = 'Shlinkio\Shlink\LocalLockFactory';
-const CUSTOM_SLUGS_REGEXP = '/[^\pL\pN._~]/u'; // Any unicode letter or number, plus ".", "_" and "~" chars
-const TITLE_TAG_VALUE = '/<title[^>]*>(.*?)<\/title>/i'; // Matches the value inside an html title tag
-
-function generateRandomShortCode(int $length): string
+function generateRandomShortCode(int $length, ShortUrlMode $mode = ShortUrlMode::STRICT): string
 {
     static $shortIdFactory;
     if ($shortIdFactory === null) {
         $shortIdFactory = new ShortIdFactory();
     }
 
-    $alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    $alphabet = $mode === ShortUrlMode::STRICT
+        ? '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        : '0123456789abcdefghijklmnopqrstuvwxyz';
     return $shortIdFactory->generate($length, $alphabet)->serialize();
 }
 
 function parseDateFromQuery(array $query, string $dateName): ?Chronos
 {
-    return ! isset($query[$dateName]) || empty($query[$dateName]) ? null : Chronos::parse($query[$dateName]);
+    return normalizeOptionalDate(empty($query[$dateName] ?? null) ? null : Chronos::parse($query[$dateName]));
 }
 
 function parseDateRangeFromQuery(array $query, string $startDateName, string $endDateName): DateRange
@@ -50,48 +51,26 @@ function parseDateRangeFromQuery(array $query, string $startDateName, string $en
     $startDate = parseDateFromQuery($query, $startDateName);
     $endDate = parseDateFromQuery($query, $endDateName);
 
-    // TODO Use match expression when migrating to PHP8
-    if ($startDate === null && $endDate === null) {
-        return DateRange::emptyInstance();
-    }
-
-    if ($startDate !== null && $endDate !== null) {
-        return DateRange::withStartAndEndDate($startDate, $endDate);
-    }
-
-    if ($startDate !== null) {
-        return DateRange::withStartDate($startDate);
-    }
-
-    return DateRange::withEndDate($endDate);
+    return buildDateRange($startDate, $endDate);
 }
 
 /**
- * @param string|DateTimeInterface|Chronos|null $date
+ * @return ($date is null ? null : Chronos)
  */
-function parseDateField($date): ?Chronos
+function normalizeOptionalDate(string|DateTimeInterface|Chronos|null $date): ?Chronos
 {
-    if ($date === null || $date instanceof Chronos) {
-        return $date;
-    }
+    $parsedDate = match (true) {
+        $date === null || $date instanceof Chronos => $date,
+        $date instanceof DateTimeInterface => Chronos::instance($date),
+        default => Chronos::parse($date),
+    };
 
-    if ($date instanceof DateTimeInterface) {
-        return Chronos::instance($date);
-    }
-
-    return Chronos::parse($date);
+    return $parsedDate?->setTimezone(date_default_timezone_get());
 }
 
-function determineTableName(string $tableName, array $emConfig = []): string
+function normalizeDate(string|DateTimeInterface|Chronos $date): Chronos
 {
-    $schema = $emConfig['connection']['schema'] ?? null;
-//    $tablePrefix = $emConfig['connection']['table_prefix'] ?? null; // TODO
-
-    if ($schema === null) {
-        return $tableName;
-    }
-
-    return sprintf('%s.%s', $schema, $tableName);
+    return normalizeOptionalDate($date);
 }
 
 function getOptionalIntFromInputFilter(InputFilter $inputFilter, string $fieldName): ?int
@@ -106,13 +85,21 @@ function getOptionalBoolFromInputFilter(InputFilter $inputFilter, string $fieldN
     return $value !== null ? (bool) $value : null;
 }
 
+function getNonEmptyOptionalValueFromInputFilter(InputFilter $inputFilter, string $fieldName): mixed
+{
+    $value = $inputFilter->getValue($fieldName);
+    return empty($value) ? null : $value;
+}
+
 function arrayToString(array $array, int $indentSize = 4): string
 {
     $indent = str_repeat(' ', $indentSize);
+    $names = array_keys($array);
     $index = 0;
 
-    return reduce_left($array, static function ($messages, string $name, $_, string $acc) use (&$index, $indent) {
+    return array_reduce($names, static function (string $acc, string $name) use (&$index, $indent, $array) {
         $index++;
+        $messages = $array[$name];
 
         return $acc . sprintf(
             "%s%s'%s' => %s",
@@ -124,7 +111,74 @@ function arrayToString(array $array, int $indentSize = 4): string
     }, '');
 }
 
-function kebabCaseToCamelCase(string $name): string
+function isCrawler(string $userAgent): bool
 {
-    return lcfirst(str_replace(' ', '', ucwords(str_replace('-', ' ', $name))));
+    static $detector;
+    if ($detector === null) {
+        $detector = new CrawlerDetect();
+    }
+
+    return $detector->isCrawler($userAgent);
+}
+
+function determineTableName(string $tableName, array $emConfig = []): string
+{
+    $schema = $emConfig['connection']['schema'] ?? null;
+//    $tablePrefix = $emConfig['connection']['table_prefix'] ?? null; // TODO
+
+    if ($schema === null) {
+        return $tableName;
+    }
+
+    return sprintf('%s.%s', $schema, $tableName);
+}
+
+function fieldWithUtf8Charset(FieldBuilder $field, array $emConfig, string $collation = 'unicode_ci'): FieldBuilder
+{
+    return match ($emConfig['connection']['driver'] ?? null) {
+        'pdo_mysql' => $field->option('charset', 'utf8mb4')
+                             ->option('collation', 'utf8mb4_' . $collation),
+        default => $field,
+    };
+}
+
+function camelCaseToHumanFriendly(string $value): string
+{
+    static $filter;
+    if ($filter === null) {
+        $filter = new CamelCaseToSeparator(' ');
+    }
+
+    return ucfirst($filter->filter($value));
+}
+
+function camelCaseToSnakeCase(string $value): string
+{
+    static $filter;
+    if ($filter === null) {
+        $filter = new CamelCaseToUnderscore();
+    }
+
+    return strtolower($filter->filter($value));
+}
+
+function toProblemDetailsType(string $errorCode): string
+{
+    return sprintf('https://shlink.io/api/error/%s', $errorCode);
+}
+
+/**
+ * @param class-string<BackedEnum> $enum
+ * @return string[]
+ */
+function enumValues(string $enum): array
+{
+    static $cache;
+    if ($cache === null) {
+        $cache = [];
+    }
+
+    return $cache[$enum] ?? (
+        $cache[$enum] = array_map(static fn (BackedEnum $type) => (string) $type->value, $enum::cases())
+    );
 }

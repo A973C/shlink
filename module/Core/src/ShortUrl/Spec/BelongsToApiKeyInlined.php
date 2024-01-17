@@ -10,16 +10,14 @@ use Shlinkio\Shlink\Rest\Entity\ApiKey;
 
 class BelongsToApiKeyInlined implements Filter
 {
-    private ApiKey $apiKey;
-
-    public function __construct(ApiKey $apiKey)
+    public function __construct(private ApiKey $apiKey)
     {
-        $this->apiKey = $apiKey;
     }
 
     public function getFilter(QueryBuilder $qb, string $dqlAlias): string
     {
         // Parameters in this query need to be inlined, not bound, as we need to use it as sub-query later
-        return (string) $qb->expr()->eq('s.authorApiKey', '\'' . $this->apiKey->getId() . '\'');
+        $conn = $qb->getEntityManager()->getConnection();
+        return $qb->expr()->eq('s.authorApiKey', $conn->quote($this->apiKey->getId()))->__toString();
     }
 }

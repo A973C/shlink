@@ -8,32 +8,53 @@ use Laminas\ConfigAggregator;
 use Laminas\Diactoros;
 use Mezzio;
 use Mezzio\ProblemDetails;
-use Mezzio\Swoole\ConfigProvider as SwooleConfigProvider;
+use Mezzio\Swoole;
+use Shlinkio\Shlink\Config\ConfigAggregator\EnvVarLoaderProvider;
 
 use function class_exists;
-use function Shlinkio\Shlink\Common\env;
+use function Shlinkio\Shlink\Config\env;
+use function Shlinkio\Shlink\Config\openswooleIsInstalled;
+use function Shlinkio\Shlink\Config\runningInRoadRunner;
+use function Shlinkio\Shlink\Core\enumValues;
 
-return (new ConfigAggregator\ConfigAggregator([
-    Mezzio\ConfigProvider::class,
-    Mezzio\Router\ConfigProvider::class,
-    Mezzio\Router\FastRouteRouter\ConfigProvider::class,
-    class_exists(SwooleConfigProvider::class) ? SwooleConfigProvider::class : new ConfigAggregator\ArrayProvider([]),
-    ProblemDetails\ConfigProvider::class,
-    Diactoros\ConfigProvider::class,
-    Common\ConfigProvider::class,
-    Config\ConfigProvider::class,
-    Importer\ConfigProvider::class,
-    IpGeolocation\ConfigProvider::class,
-    EventDispatcher\ConfigProvider::class,
-    Core\ConfigProvider::class,
-    CLI\ConfigProvider::class,
-    Rest\ConfigProvider::class,
-    new ConfigAggregator\PhpFileProvider('config/autoload/{{,*.}global,{,*.}local}.php'),
-    env('APP_ENV') === 'test'
-        ? new ConfigAggregator\PhpFileProvider('config/test/*.global.php')
-        : new ConfigAggregator\LaminasConfigProvider('config/params/{generated_config.php,*.config.{php,json}}'),
-], 'data/cache/app_config.php', [
-    Core\Config\SimplifiedConfigParser::class,
-    Core\Config\BasePathPrefixer::class,
-    Core\Config\DeprecatedConfigParser::class,
-]))->getMergedConfig();
+use const PHP_SAPI;
+
+$isTestEnv = env('APP_ENV') === 'test';
+$enableSwoole = PHP_SAPI === 'cli' && openswooleIsInstalled() && ! runningInRoadRunner();
+
+return (new ConfigAggregator\ConfigAggregator(
+    providers: [
+        ! $isTestEnv
+            ? new EnvVarLoaderProvider('config/params/generated_config.php', enumValues(Core\Config\EnvVars::class))
+            : new ConfigAggregator\ArrayProvider([]),
+        Mezzio\ConfigProvider::class,
+        Mezzio\Router\ConfigProvider::class,
+        Mezzio\Router\FastRouteRouter\ConfigProvider::class,
+        $enableSwoole && class_exists(Swoole\ConfigProvider::class)
+            ? Swoole\ConfigProvider::class
+            : new ConfigAggregator\ArrayProvider([]),
+        ProblemDetails\ConfigProvider::class,
+        Diactoros\ConfigProvider::class,
+        Common\ConfigProvider::class,
+        Config\ConfigProvider::class,
+        Importer\ConfigProvider::class,
+        IpGeolocation\ConfigProvider::class,
+        EventDispatcher\ConfigProvider::class,
+        Core\ConfigProvider::class,
+        CLI\ConfigProvider::class,
+        Rest\ConfigProvider::class,
+        new ConfigAggregator\PhpFileProvider('config/autoload/{,*.}global.php'),
+        // Local config should not be loaded during tests, whereas test config should be loaded ONLY during tests
+        new ConfigAggregator\PhpFileProvider(
+            $isTestEnv ? 'config/test/*.global.php' : 'config/autoload/{,*.}local.php',
+        ),
+        // Routes have to be loaded last
+        new ConfigAggregator\PhpFileProvider('config/autoload/routes.config.php'),
+    ],
+    cachedConfigFile: 'data/cache/app_config.php',
+    postProcessors: [
+        Core\Config\PostProcessor\BasePathPrefixer::class,
+        Core\Config\PostProcessor\MultiSegmentSlugProcessor::class,
+        Core\Config\PostProcessor\ShortUrlMethodsProcessor::class,
+    ],
+))->getMergedConfig();

@@ -12,30 +12,48 @@ use Shlinkio\Shlink\Core\ShortUrl\Spec\BelongsToDomain;
 use Shlinkio\Shlink\Core\ShortUrl\Spec\BelongsToDomainInlined;
 use Shlinkio\Shlink\Rest\Entity\ApiKeyRole;
 
-class Role
+use function sprintf;
+
+enum Role: string
 {
-    public const AUTHORED_SHORT_URLS = 'AUTHORED_SHORT_URLS';
-    public const DOMAIN_SPECIFIC = 'DOMAIN_SPECIFIC';
-    private const ROLE_FRIENDLY_NAMES = [
-        self::AUTHORED_SHORT_URLS => 'Author only',
-        self::DOMAIN_SPECIFIC => 'Domain only',
-    ];
+    case AUTHORED_SHORT_URLS = 'AUTHORED_SHORT_URLS';
+    case DOMAIN_SPECIFIC = 'DOMAIN_SPECIFIC';
+    case NO_ORPHAN_VISITS = 'NO_ORPHAN_VISITS';
 
-    public static function toSpec(ApiKeyRole $role, bool $inlined, ?string $context = null): Specification
+    public function toFriendlyName(array $meta): string
     {
-        if ($role->name() === self::AUTHORED_SHORT_URLS) {
-            $apiKey = $role->apiKey();
-            return $inlined ? Spec::andX(new BelongsToApiKeyInlined($apiKey)) : new BelongsToApiKey($apiKey, $context);
-        }
+        return match ($this) {
+            self::AUTHORED_SHORT_URLS => 'Author only',
+            self::DOMAIN_SPECIFIC => sprintf('Domain only: %s', Role::domainAuthorityFromMeta($meta)),
+            self::NO_ORPHAN_VISITS => 'No orphan visits',
+        };
+    }
 
-        if ($role->name() === self::DOMAIN_SPECIFIC) {
-            $domainId = self::domainIdFromMeta($role->meta());
-            return $inlined
-                ? Spec::andX(new BelongsToDomainInlined($domainId))
-                : new BelongsToDomain($domainId, $context);
-        }
+    public function paramName(): string
+    {
+        return match ($this) {
+            self::AUTHORED_SHORT_URLS => 'author-only',
+            self::DOMAIN_SPECIFIC => 'domain-only',
+            self::NO_ORPHAN_VISITS => 'no-orphan-visits',
+        };
+    }
 
-        return Spec::andX();
+    public static function toSpec(ApiKeyRole $role, ?string $context = null): Specification
+    {
+        return match ($role->role()) {
+            self::AUTHORED_SHORT_URLS => new BelongsToApiKey($role->apiKey(), $context),
+            self::DOMAIN_SPECIFIC => new BelongsToDomain(self::domainIdFromMeta($role->meta()), $context),
+            default => Spec::andX(),
+        };
+    }
+
+    public static function toInlinedSpec(ApiKeyRole $role): Specification
+    {
+        return match ($role->role()) {
+            self::AUTHORED_SHORT_URLS => Spec::andX(new BelongsToApiKeyInlined($role->apiKey())),
+            self::DOMAIN_SPECIFIC => Spec::andX(new BelongsToDomainInlined(self::domainIdFromMeta($role->meta()))),
+            default => Spec::andX(),
+        };
     }
 
     public static function domainIdFromMeta(array $meta): string
@@ -46,10 +64,5 @@ class Role
     public static function domainAuthorityFromMeta(array $meta): string
     {
         return $meta['authority'] ?? '';
-    }
-
-    public static function toFriendlyName(string $roleName): string
-    {
-        return self::ROLE_FRIENDLY_NAMES[$roleName] ?? '';
     }
 }

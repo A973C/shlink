@@ -4,32 +4,31 @@ declare(strict_types=1);
 
 namespace ShlinkioTest\Shlink\CLI\Command\Api;
 
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Prophecy\ObjectProphecy;
 use Shlinkio\Shlink\CLI\Command\Api\DisableKeyCommand;
 use Shlinkio\Shlink\Common\Exception\InvalidArgumentException;
 use Shlinkio\Shlink\Rest\Service\ApiKeyServiceInterface;
-use ShlinkioTest\Shlink\CLI\CliTestUtilsTrait;
+use ShlinkioTest\Shlink\CLI\Util\CliTestUtils;
 use Symfony\Component\Console\Tester\CommandTester;
 
 class DisableKeyCommandTest extends TestCase
 {
-    use CliTestUtilsTrait;
-
     private CommandTester $commandTester;
-    private ObjectProphecy $apiKeyService;
+    private MockObject & ApiKeyServiceInterface $apiKeyService;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->apiKeyService = $this->prophesize(ApiKeyServiceInterface::class);
-        $this->commandTester = $this->testerForCommand(new DisableKeyCommand($this->apiKeyService->reveal()));
+        $this->apiKeyService = $this->createMock(ApiKeyServiceInterface::class);
+        $this->commandTester = CliTestUtils::testerForCommand(new DisableKeyCommand($this->apiKeyService));
     }
 
-    /** @test */
+    #[Test]
     public function providedApiKeyIsDisabled(): void
     {
         $apiKey = 'abcd1234';
-        $this->apiKeyService->disable($apiKey)->shouldBeCalledOnce();
+        $this->apiKeyService->expects($this->once())->method('disable')->with($apiKey);
 
         $this->commandTester->execute([
             'apiKey' => $apiKey,
@@ -39,12 +38,14 @@ class DisableKeyCommandTest extends TestCase
         self::assertStringContainsString('API key "abcd1234" properly disabled', $output);
     }
 
-    /** @test */
+    #[Test]
     public function errorIsReturnedIfServiceThrowsException(): void
     {
         $apiKey = 'abcd1234';
         $expectedMessage = 'API key "abcd1234" does not exist.';
-        $disable = $this->apiKeyService->disable($apiKey)->willThrow(new InvalidArgumentException($expectedMessage));
+        $this->apiKeyService->expects($this->once())->method('disable')->with($apiKey)->willThrowException(
+            new InvalidArgumentException($expectedMessage),
+        );
 
         $this->commandTester->execute([
             'apiKey' => $apiKey,
@@ -52,6 +53,5 @@ class DisableKeyCommandTest extends TestCase
         $output = $this->commandTester->getDisplay();
 
         self::assertStringContainsString($expectedMessage, $output);
-        $disable->shouldHaveBeenCalledOnce();
     }
 }

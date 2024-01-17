@@ -28,19 +28,25 @@
                                     "$ref": "../definitions/VisitStats.json"
                                 }
                             }
-                        }
-                    }
-                },
-                "examples": {
-                    "application/json": {
-                        "visits": {
-                            "visitsCount": 1569874,
-                            "orphanVisitsCount": 71345
+                        },
+                        "example": {
+                            "visits": {
+                                "nonOrphanVisits": {
+                                    "total": 64994,
+                                    "nonBots": 64986,
+                                    "bots": 8
+                                },
+                                "orphanVisits": {
+                                    "total": 37,
+                                    "nonBots": 34,
+                                    "bots": 3
+                                }
+                            }
                         }
                     }
                 }
             },
-            "500": {
+            "default": {
                 "description": "Unexpected error.",
                 "content": {
                     "application/problem+json": {

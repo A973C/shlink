@@ -5,35 +5,24 @@ declare(strict_types=1);
 namespace ShlinkioTest\Shlink\Core\Util;
 
 use Laminas\Diactoros\Response\RedirectResponse;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use Shlinkio\Shlink\Core\Options\UrlShortenerOptions;
+use Shlinkio\Shlink\Core\Options\RedirectOptions;
 use Shlinkio\Shlink\Core\Util\RedirectResponseHelper;
 
 class RedirectResponseHelperTest extends TestCase
 {
-    private RedirectResponseHelper $helper;
-    private UrlShortenerOptions $shortenerOpts;
-
-    protected function setUp(): void
-    {
-        $this->shortenerOpts = new UrlShortenerOptions();
-        $this->helper = new RedirectResponseHelper($this->shortenerOpts);
-    }
-
-    /**
-     * @test
-     * @dataProvider provideRedirectConfigs
-     */
+    #[Test, DataProvider('provideRedirectConfigs')]
     public function expectedStatusCodeAndCacheIsReturnedBasedOnConfig(
         int $configuredStatus,
         int $configuredLifetime,
         int $expectedStatus,
-        ?string $expectedCacheControl
+        ?string $expectedCacheControl,
     ): void {
-        $this->shortenerOpts->redirectStatusCode = $configuredStatus;
-        $this->shortenerOpts->redirectCacheLifetime = $configuredLifetime;
+        $options = new RedirectOptions($configuredStatus, $configuredLifetime);
 
-        $response = $this->helper->buildRedirectResponse('destination');
+        $response = $this->helper($options)->buildRedirectResponse('destination');
 
         self::assertInstanceOf(RedirectResponse::class, $response);
         self::assertEquals($expectedStatus, $response->getStatusCode());
@@ -43,13 +32,22 @@ class RedirectResponseHelperTest extends TestCase
         self::assertEquals($expectedCacheControl ?? '', $response->getHeaderLine('Cache-Control'));
     }
 
-    public function provideRedirectConfigs(): iterable
+    public static function provideRedirectConfigs(): iterable
     {
         yield 'status 302' => [302, 20, 302, null];
-        yield 'status over 302' => [400, 20, 302, null];
+        yield 'status 307' => [307, 20, 307, null];
+        yield 'status over 308' => [400, 20, 302, null];
         yield 'status below 301' => [201, 20, 302, null];
         yield 'status 301 with valid expiration' => [301, 20, 301, 'private,max-age=20'];
         yield 'status 301 with zero expiration' => [301, 0, 301, 'private,max-age=30'];
         yield 'status 301 with negative expiration' => [301, -20, 301, 'private,max-age=30'];
+        yield 'status 308 with valid expiration' => [308, 20, 308, 'private,max-age=20'];
+        yield 'status 308 with zero expiration' => [308, 0, 308, 'private,max-age=30'];
+        yield 'status 308 with negative expiration' => [308, -20, 308, 'private,max-age=30'];
+    }
+
+    private function helper(?RedirectOptions $options = null): RedirectResponseHelper
+    {
+        return new RedirectResponseHelper($options ?? new RedirectOptions());
     }
 }

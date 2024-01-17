@@ -4,55 +4,53 @@ declare(strict_types=1);
 
 namespace Shlinkio\Shlink\Core\Tag;
 
-use Doctrine\Common\Collections\Collection;
 use Doctrine\ORM;
-use Happyr\DoctrineSpecification\Spec;
-use Shlinkio\Shlink\Core\Entity\Tag;
+use Pagerfanta\Adapter\AdapterInterface;
+use Shlinkio\Shlink\Common\Paginator\Paginator;
 use Shlinkio\Shlink\Core\Exception\ForbiddenTagOperationException;
 use Shlinkio\Shlink\Core\Exception\TagConflictException;
 use Shlinkio\Shlink\Core\Exception\TagNotFoundException;
-use Shlinkio\Shlink\Core\Repository\TagRepository;
-use Shlinkio\Shlink\Core\Repository\TagRepositoryInterface;
+use Shlinkio\Shlink\Core\Tag\Entity\Tag;
 use Shlinkio\Shlink\Core\Tag\Model\TagInfo;
 use Shlinkio\Shlink\Core\Tag\Model\TagRenaming;
-use Shlinkio\Shlink\Core\Util\TagManagerTrait;
-use Shlinkio\Shlink\Rest\ApiKey\Spec\WithApiKeySpecsEnsuringJoin;
+use Shlinkio\Shlink\Core\Tag\Model\TagsParams;
+use Shlinkio\Shlink\Core\Tag\Paginator\Adapter\TagsInfoPaginatorAdapter;
+use Shlinkio\Shlink\Core\Tag\Paginator\Adapter\TagsPaginatorAdapter;
+use Shlinkio\Shlink\Core\Tag\Repository\TagRepository;
+use Shlinkio\Shlink\Core\Tag\Repository\TagRepositoryInterface;
 use Shlinkio\Shlink\Rest\Entity\ApiKey;
 
 class TagService implements TagServiceInterface
 {
-    use TagManagerTrait;
-
-    private ORM\EntityManagerInterface $em;
-
-    public function __construct(ORM\EntityManagerInterface $em)
+    public function __construct(private readonly ORM\EntityManagerInterface $em)
     {
-        $this->em = $em;
     }
 
     /**
-     * @return Tag[]
+     * @return Tag[]|Paginator
      */
-    public function listTags(?ApiKey $apiKey = null): array
+    public function listTags(TagsParams $params, ?ApiKey $apiKey = null): Paginator
     {
         /** @var TagRepository $repo */
         $repo = $this->em->getRepository(Tag::class);
-        /** @var Tag[] $tags */
-        $tags = $repo->match(Spec::andX(
-            Spec::orderBy('name'),
-            new WithApiKeySpecsEnsuringJoin($apiKey),
-        ));
-        return $tags;
+        return $this->createPaginator(new TagsPaginatorAdapter($repo, $params, $apiKey), $params);
     }
 
     /**
-     * @return TagInfo[]
+     * @return TagInfo[]|Paginator
      */
-    public function tagsInfo(?ApiKey $apiKey = null): array
+    public function tagsInfo(TagsParams $params, ?ApiKey $apiKey = null): Paginator
     {
         /** @var TagRepositoryInterface $repo */
         $repo = $this->em->getRepository(Tag::class);
-        return $repo->findTagsWithInfo($apiKey);
+        return $this->createPaginator(new TagsInfoPaginatorAdapter($repo, $params, $apiKey), $params);
+    }
+
+    private function createPaginator(AdapterInterface $adapter, TagsParams $params): Paginator
+    {
+        return (new Paginator($adapter))
+            ->setMaxPerPage($params->itemsPerPage)
+            ->setCurrentPage($params->page);
     }
 
     /**
@@ -61,7 +59,7 @@ class TagService implements TagServiceInterface
      */
     public function deleteTags(array $tagNames, ?ApiKey $apiKey = null): void
     {
-        if ($apiKey !== null && ! $apiKey->isAdmin()) {
+        if (ApiKey::isShortUrlRestricted($apiKey)) {
             throw ForbiddenTagOperationException::forDeletion();
         }
 
@@ -71,28 +69,13 @@ class TagService implements TagServiceInterface
     }
 
     /**
-     * Provided a list of tag names, creates all that do not exist yet
-     *
-     * @deprecated
-     * @param string[] $tagNames
-     * @return Collection|Tag[]
-     */
-    public function createTags(array $tagNames): Collection
-    {
-        $tags = $this->tagNamesToEntities($this->em, $tagNames);
-        $this->em->flush();
-
-        return $tags;
-    }
-
-    /**
      * @throws TagNotFoundException
      * @throws TagConflictException
      * @throws ForbiddenTagOperationException
      */
     public function renameTag(TagRenaming $renaming, ?ApiKey $apiKey = null): Tag
     {
-        if ($apiKey !== null && ! $apiKey->isAdmin()) {
+        if (ApiKey::isShortUrlRestricted($apiKey)) {
             throw ForbiddenTagOperationException::forRenaming();
         }
 
@@ -100,17 +83,17 @@ class TagService implements TagServiceInterface
         $repo = $this->em->getRepository(Tag::class);
 
         /** @var Tag|null $tag */
-        $tag = $repo->findOneBy(['name' => $renaming->oldName()]);
+        $tag = $repo->findOneBy(['name' => $renaming->oldName]);
         if ($tag === null) {
-            throw TagNotFoundException::fromTag($renaming->oldName());
+            throw TagNotFoundException::fromTag($renaming->oldName);
         }
 
-        $newNameExists = $renaming->nameChanged() && $repo->count(['name' => $renaming->newName()]) > 0;
+        $newNameExists = $renaming->nameChanged() && $repo->count(['name' => $renaming->newName]) > 0;
         if ($newNameExists) {
             throw TagConflictException::forExistingTag($renaming);
         }
 
-        $tag->rename($renaming->newName());
+        $tag->rename($renaming->newName);
         $this->em->flush();
 
         return $tag;

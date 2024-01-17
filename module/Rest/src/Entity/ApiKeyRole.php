@@ -5,23 +5,28 @@ declare(strict_types=1);
 namespace Shlinkio\Shlink\Rest\Entity;
 
 use Shlinkio\Shlink\Common\Entity\AbstractEntity;
+use Shlinkio\Shlink\Rest\ApiKey\Role;
 
 class ApiKeyRole extends AbstractEntity
 {
-    private string $roleName;
-    private array $meta;
-    private ApiKey $apiKey;
-
-    public function __construct(string $roleName, array $meta, ApiKey $apiKey)
+    public function __construct(public readonly Role $role, private array $meta, public readonly ApiKey $apiKey)
     {
-        $this->roleName = $roleName;
-        $this->meta = $meta;
-        $this->apiKey = $apiKey;
     }
 
-    public function name(): string
+    /**
+     * @deprecated Use property access directly
+     */
+    public function role(): Role
     {
-        return $this->roleName;
+        return $this->role;
+    }
+
+    /**
+     * @deprecated Use property access directly
+     */
+    public function apiKey(): ApiKey
+    {
+        return $this->apiKey;
     }
 
     public function meta(): array
@@ -32,10 +37,5 @@ class ApiKeyRole extends AbstractEntity
     public function updateMeta(array $newMeta): void
     {
         $this->meta = $newMeta;
-    }
-
-    public function apiKey(): ApiKey
-    {
-        return $this->apiKey;
     }
 }

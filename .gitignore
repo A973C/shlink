@@ -1,4 +1,6 @@
 .idea
+bin/rr
+config/roadrunner/.pid
 build
 !docker/build
 composer.lock
@@ -7,7 +9,9 @@ vendor/
 data/database.sqlite
 data/shlink-tests.db
 data/GeoLite2-City.*
+data/infra/matomo
 docs/swagger-ui*
 docs/mercure.html
 docker-compose.override.yml
 .phpunit.result.cache
+docs/swagger/swagger-inlined.json

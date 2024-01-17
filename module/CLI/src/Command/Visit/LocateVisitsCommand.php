@@ -6,17 +6,18 @@ namespace Shlinkio\Shlink\CLI\Command\Visit;
 
 use Shlinkio\Shlink\CLI\Command\Util\AbstractLockedCommand;
 use Shlinkio\Shlink\CLI\Command\Util\LockedCommandConfig;
-use Shlinkio\Shlink\CLI\Util\ExitCodes;
+use Shlinkio\Shlink\CLI\Util\ExitCode;
 use Shlinkio\Shlink\Common\Util\IpAddress;
-use Shlinkio\Shlink\Core\Entity\Visit;
-use Shlinkio\Shlink\Core\Entity\VisitLocation;
 use Shlinkio\Shlink\Core\Exception\IpCannotBeLocatedException;
-use Shlinkio\Shlink\Core\Visit\VisitGeolocationHelperInterface;
-use Shlinkio\Shlink\Core\Visit\VisitLocatorInterface;
-use Shlinkio\Shlink\IpGeolocation\Exception\WrongIpException;
+use Shlinkio\Shlink\Core\Visit\Entity\Visit;
+use Shlinkio\Shlink\Core\Visit\Entity\VisitLocation;
+use Shlinkio\Shlink\Core\Visit\Geolocation\VisitGeolocationHelperInterface;
+use Shlinkio\Shlink\Core\Visit\Geolocation\VisitLocatorInterface;
+use Shlinkio\Shlink\Core\Visit\Geolocation\VisitToLocationHelperInterface;
+use Shlinkio\Shlink\Core\Visit\Model\UnlocatableIpType;
 use Shlinkio\Shlink\IpGeolocation\Model\Location;
-use Shlinkio\Shlink\IpGeolocation\Resolver\IpLocationResolverInterface;
 use Symfony\Component\Console\Exception\RuntimeException;
+use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -30,19 +31,14 @@ class LocateVisitsCommand extends AbstractLockedCommand implements VisitGeolocat
 {
     public const NAME = 'visit:locate';
 
-    private VisitLocatorInterface $visitLocator;
-    private IpLocationResolverInterface $ipLocationResolver;
-
     private SymfonyStyle $io;
 
     public function __construct(
-        VisitLocatorInterface $visitLocator,
-        IpLocationResolverInterface $ipLocationResolver,
-        LockFactory $locker
+        private readonly VisitLocatorInterface $visitLocator,
+        private readonly VisitToLocationHelperInterface $visitToLocation,
+        LockFactory $locker,
     ) {
         parent::__construct($locker);
-        $this->visitLocator = $visitLocator;
-        $this->ipLocationResolver = $ipLocationResolver;
     }
 
     protected function configure(): void
@@ -85,12 +81,12 @@ class LocateVisitsCommand extends AbstractLockedCommand implements VisitGeolocat
             );
         }
 
-        if ($all && $retry && ! $this->warnAndVerifyContinue($input)) {
+        if ($all && $retry && ! $this->warnAndVerifyContinue()) {
             throw new RuntimeException('Execution aborted');
         }
     }
 
-    private function warnAndVerifyContinue(InputInterface $input): bool
+    private function warnAndVerifyContinue(): bool
     {
         $this->io->warning([
             'You are about to process the location of all existing visits your short URLs received.',
@@ -108,7 +104,7 @@ class LocateVisitsCommand extends AbstractLockedCommand implements VisitGeolocat
         $all = $retry && $input->getOption('all');
 
         try {
-            $this->checkDbUpdate($input);
+            $this->checkDbUpdate();
 
             if ($all) {
                 $this->visitLocator->locateAllVisits($this);
@@ -120,14 +116,14 @@ class LocateVisitsCommand extends AbstractLockedCommand implements VisitGeolocat
             }
 
             $this->io->success('Finished locating visits');
-            return ExitCodes::EXIT_SUCCESS;
+            return ExitCode::EXIT_SUCCESS;
         } catch (Throwable $e) {
             $this->io->error($e->getMessage());
             if ($this->io->isVerbose()) {
-                $this->getApplication()->renderThrowable($e, $this->io);
+                $this->getApplication()?->renderThrowable($e, $this->io);
             }
 
-            return ExitCodes::EXIT_FAILURE;
+            return ExitCode::EXIT_FAILURE;
         }
     }
 
@@ -136,53 +132,52 @@ class LocateVisitsCommand extends AbstractLockedCommand implements VisitGeolocat
      */
     public function geolocateVisit(Visit $visit): Location
     {
-        if (! $visit->hasRemoteAddr()) {
-            $this->io->writeln(
-                '<comment>Ignored visit with no IP address</comment>',
-                OutputInterface::VERBOSITY_VERBOSE,
-            );
-            throw IpCannotBeLocatedException::forEmptyAddress();
-        }
-
-        $ipAddr = $visit->getRemoteAddr();
+        $ipAddr = $visit->getRemoteAddr() ?? '?';
         $this->io->write(sprintf('Processing IP <fg=blue>%s</>', $ipAddr));
-        if ($ipAddr === IpAddress::LOCALHOST) {
-            $this->io->writeln(' [<comment>Ignored localhost address</comment>]');
-            throw IpCannotBeLocatedException::forLocalhost();
-        }
 
         try {
-            return $this->ipLocationResolver->resolveIpLocation($ipAddr);
-        } catch (WrongIpException $e) {
-            $this->io->writeln(' [<fg=red>An error occurred while locating IP. Skipped</>]');
-            if ($this->io->isVerbose()) {
-                $this->getApplication()->renderThrowable($e, $this->io);
+            return $this->visitToLocation->resolveVisitLocation($visit);
+        } catch (IpCannotBeLocatedException $e) {
+            $this->io->writeln(match ($e->type) {
+                UnlocatableIpType::EMPTY_ADDRESS => ' [<comment>Ignored visit with no IP address</comment>]',
+                UnlocatableIpType::LOCALHOST => ' [<comment>Ignored localhost address</comment>]',
+                UnlocatableIpType::ERROR => ' [<fg=red>An error occurred while locating IP. Skipped</>]',
+            });
+
+            if ($e->type === UnlocatableIpType::ERROR && $this->io->isVerbose()) {
+                $this->getApplication()?->renderThrowable($e, $this->io);
             }
 
-            throw IpCannotBeLocatedException::forError($e);
+            throw $e;
         }
     }
 
     public function onVisitLocated(VisitLocation $visitLocation, Visit $visit): void
     {
-        $message = ! $visitLocation->isEmpty()
-            ? sprintf(' [<info>Address located in "%s"</info>]', $visitLocation->getCountryName())
-            : ' [<comment>Address not found</comment>]';
-        $this->io->writeln($message);
+        if (! $visitLocation->isEmpty()) {
+            $this->io->writeln(sprintf(' [<info>Address located in "%s"</info>]', $visitLocation->getCountryName()));
+        } elseif ($visit->hasRemoteAddr() && $visit->getRemoteAddr() !== IpAddress::LOCALHOST) {
+            $this->io->writeln(' <comment>[Could not locate address]</comment>');
+        }
     }
 
-    private function checkDbUpdate(InputInterface $input): void
+    private function checkDbUpdate(): void
     {
-        $downloadDbCommand = $this->getApplication()->find(DownloadGeoLiteDbCommand::NAME);
-        $exitCode = $downloadDbCommand->run($input, $this->io);
+        $cliApp = $this->getApplication();
+        if ($cliApp === null) {
+            return;
+        }
 
-        if ($exitCode === ExitCodes::EXIT_FAILURE) {
+        $downloadDbCommand = $cliApp->find(DownloadGeoLiteDbCommand::NAME);
+        $exitCode = $downloadDbCommand->run(new ArrayInput([]), $this->io);
+
+        if ($exitCode === ExitCode::EXIT_FAILURE) {
             throw new RuntimeException('It is not possible to locate visits without a GeoLite2 db file.');
         }
     }
 
     protected function getLockConfig(): LockedCommandConfig
     {
-        return LockedCommandConfig::nonBlocking($this->getName());
+        return LockedCommandConfig::nonBlocking(self::NAME);
     }
 }

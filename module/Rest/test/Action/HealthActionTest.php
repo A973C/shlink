@@ -5,36 +5,40 @@ declare(strict_types=1);
 namespace ShlinkioTest\Shlink\Rest\Action;
 
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\Platforms\AbstractPlatform;
+use Doctrine\DBAL\Result;
 use Doctrine\ORM\EntityManagerInterface;
 use Exception;
 use Laminas\Diactoros\Response\JsonResponse;
 use Laminas\Diactoros\ServerRequest;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
 use Shlinkio\Shlink\Core\Options\AppOptions;
 use Shlinkio\Shlink\Rest\Action\HealthAction;
 
 class HealthActionTest extends TestCase
 {
-    use ProphecyTrait;
-
     private HealthAction $action;
-    private ObjectProphecy $conn;
+    private MockObject & Connection $conn;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->conn = $this->prophesize(Connection::class);
-        $em = $this->prophesize(EntityManagerInterface::class);
-        $em->getConnection()->willReturn($this->conn->reveal());
+        $this->conn = $this->createMock(Connection::class);
+        $dbPlatform = $this->createMock(AbstractPlatform::class);
+        $dbPlatform->method('getDummySelectSQL')->willReturn('');
+        $this->conn->method('getDatabasePlatform')->willReturn($dbPlatform);
 
-        $this->action = new HealthAction($em->reveal(), new AppOptions(['version' => '1.2.3']));
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('getConnection')->willReturn($this->conn);
+
+        $this->action = new HealthAction($em, new AppOptions(version: '1.2.3'));
     }
 
-    /** @test */
-    public function passResponseIsReturnedWhenConnectionSucceeds(): void
+    #[Test]
+    public function passResponseIsReturnedWhenDummyQuerySucceeds(): void
     {
-        $ping = $this->conn->ping()->willReturn(true);
+        $this->conn->expects($this->once())->method('executeQuery')->willReturn($this->createMock(Result::class));
 
         /** @var JsonResponse $resp */
         $resp = $this->action->handle(new ServerRequest());
@@ -48,13 +52,12 @@ class HealthActionTest extends TestCase
             'project' => 'https://github.com/shlinkio/shlink',
         ], $payload['links']);
         self::assertEquals('application/health+json', $resp->getHeaderLine('Content-type'));
-        $ping->shouldHaveBeenCalledOnce();
     }
 
-    /** @test */
-    public function failResponseIsReturnedWhenConnectionFails(): void
+    #[Test]
+    public function failResponseIsReturnedWhenDummyQueryThrowsException(): void
     {
-        $ping = $this->conn->ping()->willReturn(false);
+        $this->conn->expects($this->once())->method('executeQuery')->willThrowException(new Exception());
 
         /** @var JsonResponse $resp */
         $resp = $this->action->handle(new ServerRequest());
@@ -68,26 +71,5 @@ class HealthActionTest extends TestCase
             'project' => 'https://github.com/shlinkio/shlink',
         ], $payload['links']);
         self::assertEquals('application/health+json', $resp->getHeaderLine('Content-type'));
-        $ping->shouldHaveBeenCalledOnce();
-    }
-
-    /** @test */
-    public function failResponseIsReturnedWhenConnectionThrowsException(): void
-    {
-        $ping = $this->conn->ping()->willThrow(Exception::class);
-
-        /** @var JsonResponse $resp */
-        $resp = $this->action->handle(new ServerRequest());
-        $payload = $resp->getPayload();
-
-        self::assertEquals(503, $resp->getStatusCode());
-        self::assertEquals('fail', $payload['status']);
-        self::assertEquals('1.2.3', $payload['version']);
-        self::assertEquals([
-            'about' => 'https://shlink.io',
-            'project' => 'https://github.com/shlinkio/shlink',
-        ], $payload['links']);
-        self::assertEquals('application/health+json', $resp->getHeaderLine('Content-type'));
-        $ping->shouldHaveBeenCalledOnce();
     }
 }

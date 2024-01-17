@@ -7,43 +7,39 @@ namespace ShlinkioTest\Shlink\Rest\Middleware\ShortUrl;
 use Laminas\Diactoros\Response;
 use Laminas\Diactoros\Response\JsonResponse;
 use Laminas\Diactoros\ServerRequest;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use Shlinkio\Shlink\Rest\Middleware\ShortUrl\CreateShortUrlContentNegotiationMiddleware;
 
 class CreateShortUrlContentNegotiationMiddlewareTest extends TestCase
 {
-    use ProphecyTrait;
-
     private CreateShortUrlContentNegotiationMiddleware $middleware;
-    private ObjectProphecy $requestHandler;
+    private MockObject & RequestHandlerInterface $requestHandler;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
         $this->middleware = new CreateShortUrlContentNegotiationMiddleware();
-        $this->requestHandler = $this->prophesize(RequestHandlerInterface::class);
+        $this->requestHandler = $this->createMock(RequestHandlerInterface::class);
     }
 
-    /** @test */
+    #[Test]
     public function whenNoJsonResponseIsReturnedNoFurtherOperationsArePerformed(): void
     {
         $expectedResp = new Response();
-        $this->requestHandler->handle(Argument::type(ServerRequestInterface::class))->willReturn($expectedResp);
+        $this->requestHandler->method('handle')->with($this->isInstanceOf(ServerRequestInterface::class))->willReturn(
+            $expectedResp,
+        );
 
-        $resp = $this->middleware->process(new ServerRequest(), $this->requestHandler->reveal());
+        $resp = $this->middleware->process(new ServerRequest(), $this->requestHandler);
 
         self::assertSame($expectedResp, $resp);
     }
 
-    /**
-     * @test
-     * @dataProvider provideData
-     * @param array $query
-     */
+    #[Test, DataProvider('provideData')]
     public function properResponseIsReturned(?string $accept, array $query, string $expectedContentType): void
     {
         $request = (new ServerRequest())->withQueryParams($query);
@@ -51,17 +47,16 @@ class CreateShortUrlContentNegotiationMiddlewareTest extends TestCase
             $request = $request->withHeader('Accept', $accept);
         }
 
-        $handle = $this->requestHandler->handle(Argument::type(ServerRequestInterface::class))->willReturn(
-            new JsonResponse(['shortUrl' => 'http://doma.in/foo']),
-        );
+        $this->requestHandler->expects($this->once())->method('handle')->with(
+            $this->isInstanceOf(ServerRequestInterface::class),
+        )->willReturn(new JsonResponse(['shortUrl' => 'http://s.test/foo']));
 
-        $response = $this->middleware->process($request, $this->requestHandler->reveal());
+        $response = $this->middleware->process($request, $this->requestHandler);
 
         self::assertEquals($expectedContentType, $response->getHeaderLine('Content-type'));
-        $handle->shouldHaveBeenCalled();
     }
 
-    public function provideData(): iterable
+    public static function provideData(): iterable
     {
         yield [null, [], 'application/json'];
         yield [null, ['format' => 'json'], 'application/json'];
@@ -73,26 +68,21 @@ class CreateShortUrlContentNegotiationMiddlewareTest extends TestCase
         yield ['application/json', ['format' => 'txt'], 'text/plain'];
     }
 
-    /**
-     * @test
-     * @dataProvider provideTextBodies
-     * @param array $json
-     */
+    #[Test, DataProvider('provideTextBodies')]
     public function properBodyIsReturnedInPlainTextResponses(array $json, string $expectedBody): void
     {
         $request = (new ServerRequest())->withQueryParams(['format' => 'txt']);
 
-        $handle = $this->requestHandler->handle(Argument::type(ServerRequestInterface::class))->willReturn(
-            new JsonResponse($json),
-        );
+        $this->requestHandler->expects($this->once())->method('handle')->with(
+            $this->isInstanceOf(ServerRequestInterface::class),
+        )->willReturn(new JsonResponse($json));
 
-        $response = $this->middleware->process($request, $this->requestHandler->reveal());
+        $response = $this->middleware->process($request, $this->requestHandler);
 
         self::assertEquals($expectedBody, (string) $response->getBody());
-        $handle->shouldHaveBeenCalled();
     }
 
-    public function provideTextBodies(): iterable
+    public static function provideTextBodies(): iterable
     {
         yield 'shortUrl key' => [['shortUrl' => 'foobar'], 'foobar'];
         yield 'error key' => [['error' => 'FOO_BAR'], 'FOO_BAR'];

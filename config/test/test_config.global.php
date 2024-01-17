@@ -8,57 +8,83 @@ use GuzzleHttp\Client;
 use Laminas\ConfigAggregator\ConfigAggregator;
 use Laminas\Diactoros\Response\EmptyResponse;
 use Laminas\ServiceManager\Factory\InvokableFactory;
-use Laminas\Stdlib\Glob;
-use Monolog\Handler\StreamHandler;
-use Monolog\Logger;
-use PDO;
+use League\Event\EventDispatcher;
+use Monolog\Level;
 use PHPUnit\Runner\Version;
+use Psr\Container\ContainerInterface;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Server\RequestHandlerInterface;
 use SebastianBergmann\CodeCoverage\CodeCoverage;
 use SebastianBergmann\CodeCoverage\Driver\Selector;
 use SebastianBergmann\CodeCoverage\Filter;
+use SebastianBergmann\CodeCoverage\Report\Html\Facade as Html;
 use SebastianBergmann\CodeCoverage\Report\PHP;
 use SebastianBergmann\CodeCoverage\Report\Xml\Facade as Xml;
+use Shlinkio\Shlink\Common\Logger\LoggerType;
+use Symfony\Component\Console\Application;
+use Symfony\Component\Console\Event\ConsoleCommandEvent;
+use Symfony\Component\Console\Event\ConsoleTerminateEvent;
+use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
 
+use function file_exists;
 use function Laminas\Stratigility\middleware;
-use function Shlinkio\Shlink\Common\env;
+use function Shlinkio\Shlink\Config\env;
+use function Shlinkio\Shlink\Core\ArrayUtils\contains;
 use function sprintf;
 use function sys_get_temp_dir;
 
-use const ShlinkioTest\Shlink\SWOOLE_TESTING_HOST;
-use const ShlinkioTest\Shlink\SWOOLE_TESTING_PORT;
+use const ShlinkioTest\Shlink\API_TESTS_HOST;
+use const ShlinkioTest\Shlink\API_TESTS_PORT;
 
 $isApiTest = env('TEST_ENV') === 'api';
-if ($isApiTest) {
+$isCliTest = env('TEST_ENV') === 'cli';
+$isE2eTest = $isApiTest || $isCliTest;
+$coverageType = env('GENERATE_COVERAGE');
+$generateCoverage = contains($coverageType, ['yes', 'pretty']);
+
+$coverage = null;
+if ($isE2eTest && $generateCoverage) {
     $filter = new Filter();
-    foreach (Glob::glob(__DIR__ . '/../../module/*/src') as $item) {
-        $filter->includeDirectory($item);
-    }
+    $filter->includeDirectory(__DIR__ . '/../../module/Core/src');
+    $filter->includeDirectory(__DIR__ . '/../../module/' . ($isApiTest ? 'Rest' : 'CLI') . '/src');
     $coverage = new CodeCoverage((new Selector())->forLineCoverage($filter), $filter);
 }
 
-$buildDbConnection = function (): array {
+/**
+ * @param 'api'|'cli' $type
+ */
+$exportCoverage = static function (string $type = 'api') use (&$coverage, $coverageType): void {
+    if ($coverage === null) {
+        return;
+    }
+
+    $basePath = __DIR__ . '/../../build/coverage-' . $type;
+    $covPath = $basePath . '.cov';
+
+    // Every CLI test runs on its own process and dumps the coverage afterwards.
+    // Try to load it and merge it, so that we end up with the whole coverage at the end.
+    if ($type === 'cli' && file_exists($covPath)) {
+        $coverage->merge(require $covPath);
+    }
+
+    if ($coverageType === 'pretty') {
+        (new Html())->process($coverage, $basePath . '/coverage-html');
+    } else {
+        (new PHP())->process($coverage, $covPath);
+        (new Xml(Version::getVersionString()))->process($coverage, $basePath . '/coverage-xml');
+    }
+};
+
+$buildDbConnection = static function (): array {
     $driver = env('DB_DRIVER', 'sqlite');
     $isCi = env('CI', false);
-    $getMysqlHost = fn (string $driver) => sprintf('shlink_db%s', $driver === 'mysql' ? '' : '_maria');
-    $getCiMysqlPort = fn (string $driver) => $driver === 'mysql' ? '3307' : '3308';
+    $getCiMysqlPort = static fn (string $driver) => $driver === 'mysql' ? '3307' : '3308';
 
-    $driverConfigMap = [
+    return match ($driver) {
         'sqlite' => [
             'driver' => 'pdo_sqlite',
-            'path' => sys_get_temp_dir() . '/shlink-tests.db',
-        ],
-        'mysql' => [
-            'driver' => 'pdo_mysql',
-            'host' => $isCi ? '127.0.0.1' : $getMysqlHost($driver),
-            'port' => $isCi ? $getCiMysqlPort($driver) : '3306',
-            'user' => 'root',
-            'password' => 'root',
-            'dbname' => 'shlink_test',
-            'charset' => 'utf8',
-            'driverOptions' => [
-                PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES utf8',
-                PDO::MYSQL_ATTR_USE_BUFFERED_QUERY => true,
-            ],
+            'memory' => true,
         ],
         'postgres' => [
             'driver' => 'pdo_pgsql',
@@ -75,23 +101,27 @@ $buildDbConnection = function (): array {
             'user' => 'sa',
             'password' => 'Passw0rd!',
             'dbname' => 'shlink_test',
-        ],
-    ];
-    $driverConfigMap['maria'] = $driverConfigMap['mysql'];
-
-    return $driverConfigMap[$driver] ?? [];
-};
-
-$buildTestLoggerConfig = fn (string $handlerName, string $filename) => [
-    'handlers' => [
-        $handlerName => [
-            'name' => StreamHandler::class,
-            'params' => [
-                'level' => Logger::DEBUG,
-                'stream' => sprintf('data/log/api-tests/%s', $filename),
+            'driverOptions' => [
+                'TrustServerCertificate' => 'true',
             ],
         ],
-    ],
+        default => [ // mysql and maria
+            'driver' => 'pdo_mysql',
+            'host' => $isCi ? '127.0.0.1' : sprintf('shlink_db_%s', $driver),
+            'port' => $isCi ? $getCiMysqlPort($driver) : '3306',
+            'user' => 'root',
+            'password' => 'root',
+            'dbname' => 'shlink_test',
+            'charset' => 'utf8mb4',
+        ],
+    };
+};
+
+$buildTestLoggerConfig = static fn (string $filename) => [
+    'level' => Level::Debug->value,
+    'type' => LoggerType::STREAM->value,
+    'destination' => sprintf('data/log/api-tests/%s', $filename),
+    'add_new_line' => true,
 ];
 
 return [
@@ -102,19 +132,19 @@ return [
     'url_shortener' => [
         'domain' => [
             'schema' => 'http',
-            'hostname' => 'doma.in',
+            'hostname' => 's.test',
         ],
-        'validate_url' => true,
     ],
 
     'mezzio-swoole' => [
         'enable_coroutine' => false,
         'swoole-http-server' => [
-            'host' => SWOOLE_TESTING_HOST,
-            'port' => SWOOLE_TESTING_PORT,
+            'host' => API_TESTS_HOST,
+            'port' => API_TESTS_PORT,
             'process-name' => 'shlink_test',
             'options' => [
                 'pid_file' => sys_get_temp_dir() . '/shlink-test-swoole.pid',
+                'log_file' => __DIR__ . '/../../data/log/api-tests/output.log',
                 'enable_coroutine' => false,
             ],
         ],
@@ -122,30 +152,33 @@ return [
 
     'routes' => !$isApiTest ? [] : [
         [
-            'name' => 'start_collecting_coverage',
-            'path' => '/api-tests/start-coverage',
-            'middleware' => middleware(static function () use (&$coverage) {
-                if ($coverage) {
-                    $coverage->start('API tests');
-                }
+            'name' => 'dump_coverage',
+            'path' => '/api-tests/stop-coverage',
+            'middleware' => middleware(static function () use ($exportCoverage) {
+                // TODO I have tried moving this block to a listener so that it's invoked automatically,
+                //      but then the coverage is generated empty ¯\_(ツ)_/¯
+                $exportCoverage();
                 return new EmptyResponse();
             }),
             'allowed_methods' => ['GET'],
         ],
-        [
-            'name' => 'dump_coverage',
-            'path' => '/api-tests/stop-coverage',
-            'middleware' => middleware(static function () use (&$coverage) {
-                if ($coverage) {
-                    $basePath = __DIR__ . '/../../build/coverage-api';
-                    $coverage->stop();
-                    (new PHP())->process($coverage, $basePath . '.cov');
-                    (new Xml(Version::getVersionString()))->process($coverage, $basePath . '/coverage-xml');
-                }
+    ],
 
-                return new EmptyResponse();
+    'middleware_pipeline' => !$isApiTest ? [] : [
+        'capture_code_coverage' => [
+            'middleware' => middleware(static function (
+                ServerRequestInterface $req,
+                RequestHandlerInterface $handler,
+            ) use (&$coverage): ResponseInterface {
+                $coverage?->start($req->getHeaderLine('x-coverage-id'));
+
+                try {
+                    return $handler->handle($req);
+                } finally {
+                    $coverage?->stop();
+                }
             }),
-            'allowed_methods' => ['GET'],
+            'priority' => 9999,
         ],
     ],
 
@@ -158,13 +191,69 @@ return [
     'dependencies' => [
         'services' => [
             'shlink_test_api_client' => new Client([
-                'base_uri' => sprintf('http://%s:%s/', SWOOLE_TESTING_HOST, SWOOLE_TESTING_PORT),
+                'base_uri' => sprintf('http://%s:%s/', API_TESTS_HOST, API_TESTS_PORT),
                 'http_errors' => false,
             ]),
         ],
         'factories' => [
             TestUtils\Helper\TestHelper::class => InvokableFactory::class,
         ],
+        'delegators' => $isCliTest ? [
+            Application::class => [
+                static function (
+                    ContainerInterface $c,
+                    string $serviceName,
+                    callable $callback,
+                ) use (
+                    &$coverage,
+                    $exportCoverage,
+                ) {
+                    /** @var Application $app */
+                    $app = $callback();
+                    $wrappedEventDispatcher = new EventDispatcher();
+
+                    // When the command starts, start collecting coverage
+                    $wrappedEventDispatcher->subscribeTo(
+                        ConsoleCommandEvent::class,
+                        static function () use (&$coverage): void {
+                            $id = env('COVERAGE_ID');
+                            if ($id === null) {
+                                return;
+                            }
+
+                            $coverage?->start($id);
+                        },
+                    );
+                    // When the command ends, stop collecting coverage
+                    $wrappedEventDispatcher->subscribeTo(
+                        ConsoleTerminateEvent::class,
+                        static function () use (&$coverage, $exportCoverage): void {
+                            $id = env('COVERAGE_ID');
+                            if ($id === null) {
+                                return;
+                            }
+
+                            $coverage?->stop();
+                            $exportCoverage('cli');
+                        },
+                    );
+
+                    $app->setDispatcher(new class ($wrappedEventDispatcher) implements EventDispatcherInterface {
+                        public function __construct(private EventDispatcher $wrappedDispatcher)
+                        {
+                        }
+
+                        public function dispatch(object $event, ?string $eventName = null): object
+                        {
+                            $this->wrappedDispatcher->dispatch($event);
+                            return $event;
+                        }
+                    });
+
+                    return $app;
+                },
+            ],
+        ] : [],
     ],
 
     'entity_manager' => [
@@ -173,13 +262,14 @@ return [
 
     'data_fixtures' => [
         'paths' => [
+            // TODO These are used for CLI tests too, so maybe should be somewhere else
             __DIR__ . '/../../module/Rest/test-api/Fixtures',
         ],
     ],
 
     'logger' => [
-        'Shlink' => $buildTestLoggerConfig('shlink_handler', 'shlink.log'),
-        'Access' => $buildTestLoggerConfig('access_handler', 'access.log'),
+        'Shlink' => $buildTestLoggerConfig('shlink.log'),
+        'Access' => $buildTestLoggerConfig('access.log'),
     ],
 
 ];

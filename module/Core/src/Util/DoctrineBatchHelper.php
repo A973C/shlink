@@ -12,20 +12,19 @@ use Throwable;
  */
 class DoctrineBatchHelper implements DoctrineBatchHelperInterface
 {
-    private EntityManagerInterface $em;
-
-    public function __construct(EntityManagerInterface $em)
+    public function __construct(private EntityManagerInterface $em)
     {
-        $this->em = $em;
     }
 
     /**
+     * @template T
+     * @param iterable<T> $resultSet
+     * @return iterable<T>
      * @throws Throwable
      */
     public function wrapIterable(iterable $resultSet, int $batchSize): iterable
     {
         $iteration = 0;
-
         $this->em->beginTransaction();
 
         try {
@@ -36,7 +35,6 @@ class DoctrineBatchHelper implements DoctrineBatchHelperInterface
             }
         } catch (Throwable $e) {
             $this->em->rollback();
-
             throw $e;
         }
 

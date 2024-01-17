@@ -12,125 +12,133 @@ use GuzzleHttp\Promise\FulfilledPromise;
 use GuzzleHttp\Promise\RejectedPromise;
 use GuzzleHttp\RequestOptions;
 use PHPUnit\Framework\Assert;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Prophecy\Argument;
-use Prophecy\PhpUnit\ProphecyTrait;
-use Prophecy\Prophecy\ObjectProphecy;
 use Psr\Log\LoggerInterface;
-use Shlinkio\Shlink\Core\Entity\ShortUrl;
-use Shlinkio\Shlink\Core\Entity\Visit;
 use Shlinkio\Shlink\Core\EventDispatcher\Event\VisitLocated;
 use Shlinkio\Shlink\Core\EventDispatcher\NotifyVisitToWebHooks;
-use Shlinkio\Shlink\Core\Model\Visitor;
 use Shlinkio\Shlink\Core\Options\AppOptions;
+use Shlinkio\Shlink\Core\Options\WebhookOptions;
+use Shlinkio\Shlink\Core\ShortUrl\Entity\ShortUrl;
 use Shlinkio\Shlink\Core\ShortUrl\Helper\ShortUrlStringifier;
 use Shlinkio\Shlink\Core\ShortUrl\Transformer\ShortUrlDataTransformer;
+use Shlinkio\Shlink\Core\Visit\Entity\Visit;
+use Shlinkio\Shlink\Core\Visit\Model\Visitor;
 
 use function count;
-use function Functional\contains;
+use function Shlinkio\Shlink\Core\ArrayUtils\contains;
 
 class NotifyVisitToWebHooksTest extends TestCase
 {
-    use ProphecyTrait;
+    private MockObject & ClientInterface $httpClient;
+    private MockObject & EntityManagerInterface $em;
+    private MockObject & LoggerInterface $logger;
 
-    private ObjectProphecy $httpClient;
-    private ObjectProphecy $em;
-    private ObjectProphecy $logger;
-
-    public function setUp(): void
+    protected function setUp(): void
     {
-        $this->httpClient = $this->prophesize(ClientInterface::class);
-        $this->em = $this->prophesize(EntityManagerInterface::class);
-        $this->logger = $this->prophesize(LoggerInterface::class);
+        $this->httpClient = $this->createMock(ClientInterface::class);
+        $this->em = $this->createMock(EntityManagerInterface::class);
+        $this->logger = $this->createMock(LoggerInterface::class);
     }
 
-    /** @test */
+    #[Test]
     public function emptyWebhooksMakeNoFurtherActions(): void
     {
-        $find = $this->em->find(Visit::class, '1')->willReturn(null);
+        $this->em->expects($this->never())->method('find');
 
         $this->createListener([])(new VisitLocated('1'));
-
-        $find->shouldNotHaveBeenCalled();
     }
 
-    /** @test */
+    #[Test]
     public function invalidVisitDoesNotPerformAnyRequest(): void
     {
-        $find = $this->em->find(Visit::class, '1')->willReturn(null);
-        $requestAsync = $this->httpClient->requestAsync(
-            RequestMethodInterface::METHOD_POST,
-            Argument::type('string'),
-            Argument::type('array'),
-        )->willReturn(new FulfilledPromise(''));
-        $logWarning = $this->logger->warning(
+        $this->em->expects($this->once())->method('find')->with(Visit::class, '1')->willReturn(null);
+        $this->httpClient->expects($this->never())->method('requestAsync');
+        $this->logger->expects($this->once())->method('warning')->with(
             'Tried to notify webhooks for visit with id "{visitId}", but it does not exist.',
             ['visitId' => '1'],
         );
 
         $this->createListener(['foo', 'bar'])(new VisitLocated('1'));
-
-        $find->shouldHaveBeenCalledOnce();
-        $logWarning->shouldHaveBeenCalledOnce();
-        $requestAsync->shouldNotHaveBeenCalled();
     }
 
-    /** @test */
-    public function expectedRequestsArePerformedToWebhooks(): void
+    #[Test]
+    public function orphanVisitDoesNotPerformAnyRequestWhenDisabled(): void
+    {
+        $this->em->expects($this->once())->method('find')->with(Visit::class, '1')->willReturn(
+            Visit::forBasePath(Visitor::emptyInstance()),
+        );
+        $this->httpClient->expects($this->never())->method('requestAsync');
+        $this->logger->expects($this->never())->method('warning');
+
+        $this->createListener(['foo', 'bar'], false)(new VisitLocated('1'));
+    }
+
+    #[Test, DataProvider('provideVisits')]
+    public function expectedRequestsArePerformedToWebhooks(Visit $visit, array $expectedResponseKeys): void
     {
         $webhooks = ['foo', 'invalid', 'bar', 'baz'];
         $invalidWebhooks = ['invalid', 'baz'];
 
-        $find = $this->em->find(Visit::class, '1')->willReturn(
-            Visit::forValidShortUrl(ShortUrl::createEmpty(), Visitor::emptyInstance()),
-        );
-        $requestAsync = $this->httpClient->requestAsync(
+        $this->em->expects($this->once())->method('find')->with(Visit::class, '1')->willReturn($visit);
+        $this->httpClient->expects($this->exactly(count($webhooks)))->method('requestAsync')->with(
             RequestMethodInterface::METHOD_POST,
-            Argument::type('string'),
-            Argument::that(function (array $requestOptions) {
+            $this->istype('string'),
+            $this->callback(function (array $requestOptions) use ($expectedResponseKeys) {
                 Assert::assertArrayHasKey(RequestOptions::HEADERS, $requestOptions);
                 Assert::assertArrayHasKey(RequestOptions::JSON, $requestOptions);
                 Assert::assertArrayHasKey(RequestOptions::TIMEOUT, $requestOptions);
-                Assert::assertEquals($requestOptions[RequestOptions::TIMEOUT], 10);
-                Assert::assertEquals($requestOptions[RequestOptions::HEADERS], ['User-Agent' => 'Shlink:v1.2.3']);
-                Assert::assertArrayHasKey('shortUrl', $requestOptions[RequestOptions::JSON]);
-                Assert::assertArrayHasKey('visit', $requestOptions[RequestOptions::JSON]);
+                Assert::assertEquals(10, $requestOptions[RequestOptions::TIMEOUT]);
+                Assert::assertEquals(['User-Agent' => 'Shlink:v1.2.3'], $requestOptions[RequestOptions::HEADERS]);
 
-                return $requestOptions;
+                $json = $requestOptions[RequestOptions::JSON];
+                Assert::assertCount(count($expectedResponseKeys), $json);
+                foreach ($expectedResponseKeys as $key) {
+                    Assert::assertArrayHasKey($key, $json);
+                }
+
+                return true;
             }),
-        )->will(function (array $args) use ($invalidWebhooks) {
-            [, $webhook] = $args;
-            $e = new Exception('');
-
-            return contains($invalidWebhooks, $webhook) ? new RejectedPromise($e) : new FulfilledPromise('');
+        )->willReturnCallback(function ($_, $webhook) use ($invalidWebhooks) {
+            $shouldReject = contains($webhook, $invalidWebhooks);
+            return $shouldReject ? new RejectedPromise(new Exception('')) : new FulfilledPromise('');
         });
-        $logWarning = $this->logger->warning(
+        $this->logger->expects($this->exactly(count($invalidWebhooks)))->method('warning')->with(
             'Failed to notify visit with id "{visitId}" to webhook "{webhook}". {e}',
-            Argument::that(function (array $extra) {
+            $this->callback(function (array $extra): bool {
                 Assert::assertArrayHasKey('webhook', $extra);
                 Assert::assertArrayHasKey('visitId', $extra);
                 Assert::assertArrayHasKey('e', $extra);
 
-                return $extra;
+                return true;
             }),
         );
 
         $this->createListener($webhooks)(new VisitLocated('1'));
-
-        $find->shouldHaveBeenCalledOnce();
-        $requestAsync->shouldHaveBeenCalledTimes(count($webhooks));
-        $logWarning->shouldHaveBeenCalledTimes(count($invalidWebhooks));
     }
 
-    private function createListener(array $webhooks): NotifyVisitToWebHooks
+    public static function provideVisits(): iterable
+    {
+        yield 'regular visit' => [
+            Visit::forValidShortUrl(ShortUrl::createFake(), Visitor::emptyInstance()),
+            ['shortUrl', 'visit'],
+        ];
+        yield 'orphan visit' => [Visit::forBasePath(Visitor::emptyInstance()), ['visit']];
+    }
+
+    private function createListener(array $webhooks, bool $notifyOrphanVisits = true): NotifyVisitToWebHooks
     {
         return new NotifyVisitToWebHooks(
-            $this->httpClient->reveal(),
-            $this->em->reveal(),
-            $this->logger->reveal(),
-            $webhooks,
+            $this->httpClient,
+            $this->em,
+            $this->logger,
+            new WebhookOptions(
+                ['webhooks' => $webhooks, 'notify_orphan_visits_to_webhooks' => $notifyOrphanVisits],
+            ),
             new ShortUrlDataTransformer(new ShortUrlStringifier([])),
-            new AppOptions(['name' => 'Shlink', 'version' => '1.2.3']),
+            new AppOptions('Shlink', '1.2.3'),
         );
     }
 }

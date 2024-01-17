@@ -8,20 +8,12 @@ use Shlinkio\Shlink\Rest\Entity\ApiKey;
 
 final class ApiKeyCheckResult
 {
-    private ?ApiKey $apiKey;
-
-    public function __construct(?ApiKey $apiKey = null)
+    public function __construct(public readonly ?ApiKey $apiKey = null)
     {
-        $this->apiKey = $apiKey;
     }
 
     public function isValid(): bool
     {
         return $this->apiKey !== null && $this->apiKey->isValid();
-    }
-
-    public function apiKey(): ?ApiKey
-    {
-        return $this->apiKey;
     }
 }

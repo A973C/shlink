@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Shlinkio\Shlink\Core\EventDispatcher;
 
-use Closure;
 use Doctrine\ORM\EntityManagerInterface;
 use Fig\Http\Message\RequestMethodInterface;
 use GuzzleHttp\ClientInterface;
@@ -14,47 +13,34 @@ use GuzzleHttp\Promise\Utils;
 use GuzzleHttp\RequestOptions;
 use Psr\Log\LoggerInterface;
 use Shlinkio\Shlink\Common\Rest\DataTransformerInterface;
-use Shlinkio\Shlink\Core\Entity\Visit;
 use Shlinkio\Shlink\Core\EventDispatcher\Event\VisitLocated;
 use Shlinkio\Shlink\Core\Options\AppOptions;
+use Shlinkio\Shlink\Core\Options\WebhookOptions;
+use Shlinkio\Shlink\Core\Visit\Entity\Visit;
 use Throwable;
 
-use function Functional\map;
-use function Functional\partial_left;
+use function array_map;
 
+/** @deprecated */
 class NotifyVisitToWebHooks
 {
-    private ClientInterface $httpClient;
-    private EntityManagerInterface $em;
-    private LoggerInterface $logger;
-    /** @var string[] */
-    private array $webhooks;
-    private DataTransformerInterface $transformer;
-    private AppOptions $appOptions;
-
     public function __construct(
-        ClientInterface $httpClient,
-        EntityManagerInterface $em,
-        LoggerInterface $logger,
-        array $webhooks,
-        DataTransformerInterface $transformer,
-        AppOptions $appOptions
+        private readonly ClientInterface $httpClient,
+        private readonly EntityManagerInterface $em,
+        private readonly LoggerInterface $logger,
+        private readonly WebhookOptions $webhookOptions,
+        private readonly DataTransformerInterface $transformer,
+        private readonly AppOptions $appOptions,
     ) {
-        $this->httpClient = $httpClient;
-        $this->em = $em;
-        $this->logger = $logger;
-        $this->webhooks = $webhooks;
-        $this->transformer = $transformer;
-        $this->appOptions = $appOptions;
     }
 
     public function __invoke(VisitLocated $shortUrlLocated): void
     {
-        if (empty($this->webhooks)) {
+        if (! $this->webhookOptions->hasWebhooks()) {
             return;
         }
 
-        $visitId = $shortUrlLocated->visitId();
+        $visitId = $shortUrlLocated->visitId;
 
         /** @var Visit|null $visit */
         $visit = $this->em->find(Visit::class, $visitId);
@@ -62,6 +48,10 @@ class NotifyVisitToWebHooks
             $this->logger->warning('Tried to notify webhooks for visit with id "{visitId}", but it does not exist.', [
                 'visitId' => $visitId,
             ]);
+            return;
+        }
+
+        if ($visit->isOrphan() && ! $this->webhookOptions->notifyOrphanVisits()) {
             return;
         }
 
@@ -74,15 +64,16 @@ class NotifyVisitToWebHooks
 
     private function buildRequestOptions(Visit $visit): array
     {
+        $payload = ['visit' => $visit->jsonSerialize()];
+        $shortUrl = $visit->getShortUrl();
+        if ($shortUrl !== null) {
+            $payload['shortUrl'] = $this->transformer->transform($shortUrl);
+        }
+
         return [
             RequestOptions::TIMEOUT => 10,
-            RequestOptions::HEADERS => [
-                'User-Agent' => (string) $this->appOptions,
-            ],
-            RequestOptions::JSON => [
-                'shortUrl' => $this->transformer->transform($visit->getShortUrl()),
-                'visit' => $visit->jsonSerialize(),
-            ],
+            RequestOptions::JSON => $payload,
+            RequestOptions::HEADERS => ['User-Agent' => $this->appOptions->__toString()],
         ];
     }
 
@@ -91,13 +82,11 @@ class NotifyVisitToWebHooks
      */
     private function performRequests(array $requestOptions, string $visitId): array
     {
-        $logWebhookFailure = Closure::fromCallable([$this, 'logWebhookFailure']);
-
-        return map(
-            $this->webhooks,
+        return array_map(
             fn (string $webhook): PromiseInterface => $this->httpClient
                 ->requestAsync(RequestMethodInterface::METHOD_POST, $webhook, $requestOptions)
-                ->otherwise(partial_left($logWebhookFailure, $webhook, $visitId)),
+                ->otherwise(fn (Throwable $e) => $this->logWebhookFailure($webhook, $visitId, $e)),
+            $this->webhookOptions->webhooks(),
         );
     }
 

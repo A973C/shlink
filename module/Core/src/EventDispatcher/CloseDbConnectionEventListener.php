@@ -8,13 +8,11 @@ use Shlinkio\Shlink\Common\Doctrine\ReopeningEntityManagerInterface;
 
 class CloseDbConnectionEventListener
 {
-    private ReopeningEntityManagerInterface $em;
     /** @var callable */
     private $wrapped;
 
-    public function __construct(ReopeningEntityManagerInterface $em, callable $wrapped)
+    public function __construct(private ReopeningEntityManagerInterface $em, callable $wrapped)
     {
-        $this->em = $em;
         $this->wrapped = $wrapped;
     }
 
@@ -26,7 +24,7 @@ class CloseDbConnectionEventListener
             ($this->wrapped)($event);
         } finally {
             $this->em->getConnection()->close();
-            $this->em->clear();
+            $this->em->close();
         }
     }
 }

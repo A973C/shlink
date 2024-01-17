@@ -15,7 +15,8 @@ use function Shlinkio\Shlink\Core\determineTableName;
 return static function (ClassMetadata $metadata, array $emConfig): void {
     $builder = new ClassMetadataBuilder($metadata);
 
-    $builder->setTable(determineTableName('api_keys', $emConfig));
+    $builder->setTable(determineTableName('api_keys', $emConfig))
+            ->setCustomRepositoryClass(ApiKey\Repository\ApiKeyRepository::class);
 
     $builder->createField('id', Types::BIGINT)
             ->makePrimaryKey()
@@ -43,7 +44,7 @@ return static function (ClassMetadata $metadata, array $emConfig): void {
 
     $builder->createOneToMany('roles', ApiKeyRole::class)
             ->mappedBy('apiKey')
-            ->setIndexBy('roleName')
+            ->setIndexBy('role')
             ->cascadePersist()
             ->orphanRemoval()
             ->build();

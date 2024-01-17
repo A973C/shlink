@@ -7,10 +7,10 @@ namespace Shlinkio\Shlink\Core\EventDispatcher;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Log\LoggerInterface;
-use Shlinkio\Shlink\Core\Entity\Visit;
-use Shlinkio\Shlink\Core\Entity\VisitLocation;
 use Shlinkio\Shlink\Core\EventDispatcher\Event\UrlVisited;
 use Shlinkio\Shlink\Core\EventDispatcher\Event\VisitLocated;
+use Shlinkio\Shlink\Core\Visit\Entity\Visit;
+use Shlinkio\Shlink\Core\Visit\Entity\VisitLocation;
 use Shlinkio\Shlink\IpGeolocation\Exception\WrongIpException;
 use Shlinkio\Shlink\IpGeolocation\GeoLite2\DbUpdaterInterface;
 use Shlinkio\Shlink\IpGeolocation\Model\Location;
@@ -19,29 +19,18 @@ use Throwable;
 
 class LocateVisit
 {
-    private IpLocationResolverInterface $ipLocationResolver;
-    private EntityManagerInterface $em;
-    private LoggerInterface $logger;
-    private DbUpdaterInterface $dbUpdater;
-    private EventDispatcherInterface $eventDispatcher;
-
     public function __construct(
-        IpLocationResolverInterface $ipLocationResolver,
-        EntityManagerInterface $em,
-        LoggerInterface $logger,
-        DbUpdaterInterface $dbUpdater,
-        EventDispatcherInterface $eventDispatcher
+        private IpLocationResolverInterface $ipLocationResolver,
+        private EntityManagerInterface $em,
+        private LoggerInterface $logger,
+        private DbUpdaterInterface $dbUpdater,
+        private EventDispatcherInterface $eventDispatcher,
     ) {
-        $this->ipLocationResolver = $ipLocationResolver;
-        $this->em = $em;
-        $this->logger = $logger;
-        $this->dbUpdater = $dbUpdater;
-        $this->eventDispatcher = $eventDispatcher;
     }
 
     public function __invoke(UrlVisited $shortUrlVisited): void
     {
-        $visitId = $shortUrlVisited->visitId();
+        $visitId = $shortUrlVisited->visitId;
 
         /** @var Visit|null $visit */
         $visit = $this->em->find(Visit::class, $visitId);
@@ -52,8 +41,8 @@ class LocateVisit
             return;
         }
 
-        $this->locateVisit($visitId, $shortUrlVisited->originalIpAddress(), $visit);
-        $this->eventDispatcher->dispatch(new VisitLocated($visitId));
+        $this->locateVisit($visitId, $shortUrlVisited->originalIpAddress, $visit);
+        $this->eventDispatcher->dispatch(new VisitLocated($visitId, $shortUrlVisited->originalIpAddress));
     }
 
     private function locateVisit(string $visitId, ?string $originalIpAddress, Visit $visit): void
@@ -66,12 +55,12 @@ class LocateVisit
         }
 
         $isLocatable = $originalIpAddress !== null || $visit->isLocatable();
-        $addr = $originalIpAddress ?? $visit->getRemoteAddr();
+        $addr = $originalIpAddress ?? $visit->getRemoteAddr() ?? '';
 
         try {
             $location = $isLocatable ? $this->ipLocationResolver->resolveIpLocation($addr) : Location::emptyInstance();
 
-            $visit->locate(new VisitLocation($location));
+            $visit->locate(VisitLocation::fromGeolocation($location));
             $this->em->flush();
         } catch (WrongIpException $e) {
             $this->logger->warning(

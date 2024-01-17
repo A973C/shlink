@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ShlinkioTest\Shlink\Core\Exception;
 
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Shlinkio\Shlink\Core\Exception\TagConflictException;
 use Shlinkio\Shlink\Core\Tag\Model\TagRenaming;
@@ -12,7 +13,7 @@ use function sprintf;
 
 class TagConflictExceptionTest extends TestCase
 {
-    /** @test */
+    #[Test]
     public function properlyCreatesExceptionForExistingTag(): void
     {
         $oldName = 'foo';
@@ -23,7 +24,7 @@ class TagConflictExceptionTest extends TestCase
         self::assertEquals($expectedMessage, $e->getMessage());
         self::assertEquals($expectedMessage, $e->getDetail());
         self::assertEquals('Tag conflict', $e->getTitle());
-        self::assertEquals('TAG_CONFLICT', $e->getType());
+        self::assertEquals('https://shlink.io/api/error/tag-conflict', $e->getType());
         self::assertEquals(['oldName' => $oldName, 'newName' => $newName], $e->getAdditionalData());
         self::assertEquals(409, $e->getStatus());
     }
